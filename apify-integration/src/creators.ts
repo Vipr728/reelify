@@ -14,7 +14,7 @@ import type { Creator, Niche } from './types.js';
 //    If GPT discards everything, we use the top frequency-ranked candidates directly.
 
 const MIN_CREATORS = 3;
-const TARGET_CREATORS = 5;
+const TARGET_CREATORS = 3;
 
 const TavilyResultSchema = z.object({
   results: z.array(
@@ -64,9 +64,17 @@ async function tavilySearch(query: string, maxResults: number) {
   return TavilyResultSchema.parse(json).results;
 }
 
+// Words that appear as instagram.com/<word>/ but aren't user handles —
+// IG hub pages, app routes, generic categories, marketing pages. Without
+// this filter "instagram.com/popular/" sneaks in and the scraper wastes
+// minutes retrying a non-existent profile.
 const HANDLE_BLOCKLIST = new Set([
   'p', 'reel', 'reels', 'tv', 'stories', 'explore', 'accounts', 'directory',
   'about', 'developer', 'legal', 'press', 'api', 'web', 'tags', 'topics',
+  'popular', 'trending', 'login', 'signup', 'session', 'graphql', 'ajax',
+  'create', 'media', 'invites', 'shop', 'feed', 'home', 'help', 'oauth',
+  'privacy', 'terms', 'safety', 'business', 'features', 'download',
+  'blog', 'careers', 'contact',
 ]);
 
 type Pool = Map<string, { count: number; snippets: string[] }>;
@@ -95,11 +103,22 @@ function poolToCandidates(pool: Pool): string[] {
   return [...pool.entries()].sort((a, b) => b[1].count - a[1].count).map(([h]) => h);
 }
 
+function isUsableQuery(q: string): boolean {
+  const trimmed = q.trim();
+  if (trimmed.length < 4) return false;
+  // GPT sometimes returns placeholders like "entrepreneurship in [City]" or
+  // "<niche> creators". Skip anything with unfilled brackets.
+  if (/[\[\]<>{}]/.test(trimmed)) return false;
+  return true;
+}
+
 async function runQueriesIntoPool(queries: string[], perQueryMax: number): Promise<Pool> {
   const pool: Pool = new Map();
-  // Run sequentially so we can short-circuit once we have enough.
   for (const q of queries) {
-    if (!q.trim()) continue;
+    if (!isUsableQuery(q)) {
+      console.error(`[creators] skipping placeholder query: ${q}`);
+      continue;
+    }
     console.error(`[creators] tavily query: ${q}`);
     try {
       const results = await tavilySearch(q, perQueryMax);
@@ -124,7 +143,9 @@ frequency). If fewer than N fit, return fewer. Return JSON only.`;
 
 export async function findTopCreators(niche: Niche): Promise<Creator[]> {
   const env = loadEnv();
-  const topN = Math.max(env.TAVILY_TOP_N, TARGET_CREATORS);
+  // Honor TAVILY_TOP_N if set, but cap at TARGET_CREATORS to keep Apify hits
+  // low (default 3). Larger values blow past Instagram's anti-bot thresholds.
+  const topN = Math.min(Math.max(env.TAVILY_TOP_N, MIN_CREATORS), TARGET_CREATORS);
 
   // 1. Run all of the niche's primary queries.
   const primary = niche.search_queries?.length
