@@ -2,16 +2,20 @@ import { ApifyClient } from 'apify-client';
 import { loadEnv } from './env.js';
 import type { Creator, ScrapedPost } from './types.js';
 
-// Initial Apify scrape: hit each creator's profile, pull the most recent N posts.
-// We default to `apify/instagram-scraper` because it returns flat post items
-// keyed by `ownerUsername` + `url` + `videoUrl` — the shape we parse.
-// The older `apify/instagram-profile-scraper` returns nested profile objects
-// with `latestPosts` arrays instead, which would silently yield zero posts here.
+// Default actor is `apify/instagram-reel-scraper`: takes a `username` array,
+// runs a real browser (Puppeteer), and returns one item per reel. The
+// browser-based scrape gets blocked by IG's anti-bot far less than the
+// Cheerio-based `apify/instagram-scraper`, which is what we used before.
+//
+// If you override APIFY_IG_ACTOR with a different actor, make sure its
+// input takes a `username` array (or set APIFY_INPUT_KEY=directUrls) and
+// its output items expose `ownerUsername` + `url` + `videoUrl`.
 
 type RawIgItem = {
   url?: string;
   shortCode?: string;
   ownerUsername?: string;
+  username?: string;
   videoUrl?: string;
   displayUrl?: string;
   caption?: string;
@@ -21,8 +25,8 @@ type RawIgItem = {
   videoPlayCount?: number;
   videoDuration?: number;
   timestamp?: string;
-  type?: string; // 'Video' | 'Image' | 'Sidecar'
-  productType?: string; // 'clips' = Reels
+  type?: string;
+  productType?: string;
 };
 
 export async function scrapeCreators(creators: Creator[]): Promise<ScrapedPost[]> {
@@ -34,18 +38,15 @@ export async function scrapeCreators(creators: Creator[]): Promise<ScrapedPost[]
     return [];
   }
 
-  const input = {
-    directUrls: creators.map((c) => `https://www.instagram.com/${c.handle}/`),
-    resultsType: 'posts',
+  const usernames = creators.map((c) => c.handle);
+  const input: Record<string, unknown> = {
+    username: usernames,
     resultsLimit: env.APIFY_POSTS_PER_PROFILE,
-    addParentData: false,
-    searchType: 'user',
-    searchLimit: 1,
   };
 
   console.error(
     `[apify] starting ${env.APIFY_IG_ACTOR} for ${creators.length} creators ` +
-      `(${env.APIFY_POSTS_PER_PROFILE} posts each)`,
+      `(${env.APIFY_POSTS_PER_PROFILE} reels each): ${usernames.join(', ')}`,
   );
 
   const run = await client.actor(env.APIFY_IG_ACTOR).call(input, { waitSecs: 600 });
@@ -71,11 +72,12 @@ export async function scrapeCreators(creators: Creator[]): Promise<ScrapedPost[]
 
   for (const it of items) {
     if (!it.url) continue;
-    if (!it.ownerUsername) {
+    const owner = it.ownerUsername ?? it.username;
+    if (!owner) {
       skippedNoOwner++;
       continue;
     }
-    if (!handles.has(it.ownerUsername.toLowerCase())) {
+    if (!handles.has(owner.toLowerCase())) {
       skippedNotInList++;
       continue;
     }
@@ -87,7 +89,7 @@ export async function scrapeCreators(creators: Creator[]): Promise<ScrapedPost[]
     }
 
     posts.push({
-      creator_handle: it.ownerUsername,
+      creator_handle: owner,
       post_url: it.url,
       shortcode: it.shortCode ?? it.url.split('/').filter(Boolean).pop() ?? '',
       video_url: it.videoUrl,
@@ -102,7 +104,7 @@ export async function scrapeCreators(creators: Creator[]): Promise<ScrapedPost[]
   }
 
   console.error(
-    `[apify] kept ${posts.length} video posts ` +
+    `[apify] kept ${posts.length} reels ` +
       `(skipped: no-owner=${skippedNoOwner}, not-in-list=${skippedNotInList}, not-video=${skippedNotVideo})`,
   );
 

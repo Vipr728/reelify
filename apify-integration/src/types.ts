@@ -7,6 +7,12 @@ export type Niche = {
   keywords: string[];
   audience: string;
   rationale: string;
+  // 3-5 distinct web-search queries crafted to surface real Instagram creators
+  // in this niche. Pipeline runs each one through Tavily and unions the
+  // resulting candidates so we get >= 3-5 real handles even on narrow niches.
+  search_queries: string[];
+  // Adjacent niches to widen the search if the primary queries come up dry.
+  adjacent_niches?: string[];
 };
 
 export type Creator = {

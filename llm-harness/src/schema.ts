@@ -311,6 +311,13 @@ export function assertPlanCompatibleWithContext(plan: EditPlan, context: EditCon
     errors.push("plan.output.durationSec must be less than or equal to context.output.targetDurationSec");
   }
 
+  const talkingHead = context.assets.find((asset) => asset.kind === "talking_head");
+  if (talkingHead && plan.output.durationSec > talkingHead.durationSec + EPSILON) {
+    errors.push(
+      `plan.output.durationSec must be less than or equal to talking_head durationSec (${talkingHead.durationSec})`,
+    );
+  }
+
   for (const asset of plan.assets) {
     const contextAsset = contextAssets.get(asset.id);
     if (!contextAsset) {

@@ -11,16 +11,31 @@ async function main() {
     throw new Error('pipeline:json requires --script, --script-file, or stdin.');
   }
 
-  const report = await runApifyPipeline(
-    { kind: 'script', text: script },
-    {
-      skipQuantify: flags['skip-quantify'] === true,
-      skipSynthesize: flags['skip-synthesize'] === true,
-      quantifyConcurrency: typeof flags.concurrency === 'string' ? Number(flags.concurrency) : undefined,
-    },
-  );
+  // Belt-and-suspenders: while the pipeline runs, redirect ANY write to
+  // process.stdout into process.stderr. Some deps (tesseract.js progress logs,
+  // emscripten printfs, etc.) write to stdout and would mix into our JSON
+  // output, which the host parses verbatim. Restore for the final write.
+  const realStdoutWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    return (process.stderr.write as (...a: unknown[]) => boolean)(chunk, ...rest);
+  }) as typeof process.stdout.write;
 
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  let report;
+  try {
+    report = await runApifyPipeline(
+      { kind: 'script', text: script },
+      {
+        skipQuantify: flags['skip-quantify'] === true,
+        skipSynthesize: flags['skip-synthesize'] === true,
+        quantifyConcurrency:
+          typeof flags.concurrency === 'string' ? Number(flags.concurrency) : undefined,
+      },
+    );
+  } finally {
+    process.stdout.write = realStdoutWrite;
+  }
+
+  realStdoutWrite(`${JSON.stringify(report, null, 2)}\n`);
 }
 
 function parseFlags(args: string[]) {

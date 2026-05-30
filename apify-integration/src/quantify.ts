@@ -222,7 +222,13 @@ async function quantifyOne(
 
 // Convenience for the local-file test loop: analyze one mp4 already on disk.
 export async function quantifyLocalFile(filePath: string): Promise<VideoFeatures> {
-  const worker = await createWorker('eng');
+  const worker = await createWorker('eng', undefined, {
+    // tesseract.js's default logger does console.log(progressObj) which lands
+    // on stdout and breaks downstream JSON parsing. errorHandler hides the
+    // leptonica "Image too small to scale" / "Line cannot be recognized" lines.
+    logger: () => {},
+    errorHandler: () => {},
+  });
   try {
     return await analyzeFile(filePath, `file://${path.resolve(filePath)}`, worker);
   } finally {
@@ -254,7 +260,13 @@ export async function quantifyPosts(
   opts: { concurrency?: number } = {},
 ): Promise<VideoFeatures[]> {
   if (!posts.length) return [];
-  const worker = await createWorker('eng');
+  const worker = await createWorker('eng', undefined, {
+    // tesseract.js's default logger does console.log(progressObj) which lands
+    // on stdout and breaks downstream JSON parsing. errorHandler hides the
+    // leptonica "Image too small to scale" / "Line cannot be recognized" lines.
+    logger: () => {},
+    errorHandler: () => {},
+  });
   try {
     return await pMap(posts, (p) => quantifyOne(p, worker), opts.concurrency ?? 3);
   } finally {

@@ -11,9 +11,11 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().min(1),
   TAVILY_API_KEY: z.string().min(1),
   APIFY_TOKEN: z.string().min(1),
-  APIFY_IG_ACTOR: z.string().default('apify/instagram-scraper'),
-  APIFY_POSTS_PER_PROFILE: z.coerce.number().int().positive().default(10),
-  TAVILY_TOP_N: z.coerce.number().int().positive().default(5),
+  APIFY_IG_ACTOR: z.string().default('apify/instagram-reel-scraper'),
+  // 1 post per creator × 3 creators = 3 reels analyzed. Lean by default to
+  // dodge Instagram blocks and keep wall-clock under a minute.
+  APIFY_POSTS_PER_PROFILE: z.coerce.number().int().positive().default(1),
+  TAVILY_TOP_N: z.coerce.number().int().positive().default(3),
 });
 
 export type Env = z.infer<typeof schema>;
