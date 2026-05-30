@@ -1,0 +1,103 @@
+/* ============ REELIFY — minimal centered shell ============ */
+:root{
+  --ink:#0C0B09; --bg2:#141209; --card:#19160F; --card2:#201C13;
+  --line:rgba(245,240,228,0.08); --line2:rgba(245,240,228,0.14); --line3:rgba(245,240,228,0.22);
+  --text:#F3EDDF; --text2:#9C9588; --text3:#615C51; --text4:#403B33;
+  --lime:#CDFF4F; --lime-deep:#A6E000; --lime-soft:rgba(205,255,79,0.12);
+  --coral:#FF7A52; --coral-deep:#E8431A; --coral-soft:rgba(255,122,82,0.13);
+  --accent:var(--lime); --accent-deep:var(--lime-deep); --accent-soft:var(--lime-soft); --accent-ink:#0C0B09;
+  --display:'Bricolage Grotesque',sans-serif;
+  --body:'Schibsted Grotesk',sans-serif;
+  --mono:'JetBrains Mono',monospace;
+  --maxw:760px;
+  --ease:cubic-bezier(.22,1,.36,1); --pop:cubic-bezier(.34,1.5,.64,1);
+}
+*{box-sizing:border-box; margin:0; padding:0}
+html,body{height:100%}
+body{
+  background:var(--ink); color:var(--text); font-family:var(--body);
+  -webkit-font-smoothing:antialiased; line-height:1.5; overflow-x:hidden;
+}
+#root{min-height:100vh}
+::selection{background:var(--accent); color:var(--accent-ink)}
+button{font-family:inherit; cursor:pointer; border:none; background:none; color:inherit}
+input{font-family:inherit}
+
+/* atmosphere */
+.atmos{position:fixed; inset:0; pointer-events:none; z-index:0}
+.atmos.glow{opacity:.5; background:
+  radial-gradient(ellipse 60% 45% at 50% -5%, var(--accent-soft), transparent 60%),
+  radial-gradient(ellipse 50% 40% at 50% 105%, var(--coral-soft), transparent 55%)}
+.atmos.grain{opacity:.045; mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+[data-grain="off"] .atmos.grain{display:none}
+
+/* ============ SHELL ============ */
+.shell{position:relative; z-index:1; min-height:100vh; display:flex; flex-direction:column; align-items:center}
+
+/* top: wordmark + stepper */
+.topnav{width:100%; display:flex; flex-direction:column; align-items:center; gap:18px; padding:30px 24px 0}
+.brand{display:flex; align-items:center; gap:9px; font-family:var(--display); font-weight:800; font-size:17px; letter-spacing:-.01em}
+.logo-mark{width:24px; height:24px; border-radius:7px; background:var(--accent); position:relative; display:grid; place-items:center; box-shadow:0 0 18px var(--accent-soft); flex:none; transition:.3s}
+.logo-mark::before{content:""; width:0; height:0; border-left:7px solid var(--accent-ink); border-top:5px solid transparent; border-bottom:5px solid transparent; margin-left:2px}
+
+.stepper{display:flex; align-items:center; gap:8px}
+.stepper .seg{width:30px; height:3px; border-radius:99px; background:var(--line2); cursor:pointer}
+.stepper .seg.done{background:var(--accent)}
+.stepper .seg.active{background:var(--accent); box-shadow:0 0 12px var(--accent-soft); width:42px}
+.stepper .seg.future{cursor:default}
+.step-meta{font-family:var(--mono); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--text3); white-space:nowrap}
+.step-meta b{color:var(--text2); font-weight:500}
+
+/* stage */
+.stage{flex:1; width:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 24px 40px}
+.screen{width:100%; max-width:var(--maxw); margin:0 auto; text-align:center; display:flex; flex-direction:column; align-items:center}
+.screen.wide{max-width:980px}
+
+/* ============ TYPE / PRIMITIVES ============ */
+.eyebrow{font-family:var(--mono); font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--text3); margin-bottom:20px}
+.eyebrow .n{color:var(--accent)}
+.h1{font-family:var(--display); font-weight:600; font-size:clamp(30px,4.4vw,46px); letter-spacing:-.035em; line-height:1.02}
+.h1 em{font-style:italic; font-weight:400; color:var(--coral)}
+.lede{color:var(--text2); font-size:17px; max-width:48ch; margin:16px auto 0; line-height:1.55; text-wrap:pretty}
+
+.btn{display:inline-flex; align-items:center; gap:9px; font-weight:600; font-size:14.5px; letter-spacing:-.01em; padding:14px 26px; border-radius:999px; transition:.2s var(--ease)}
+.btn .ar{transition:transform .25s var(--ease)}
+.btn:hover .ar{transform:translateX(4px)}
+.btn-primary{background:var(--accent); color:var(--accent-ink); box-shadow:0 6px 28px var(--accent-soft)}
+.btn-primary:hover{filter:brightness(1.06)}
+.btn-primary:active{transform:translateY(1px)}
+.btn-primary:disabled{background:var(--card2); color:var(--text3); box-shadow:none; cursor:not-allowed}
+.btn-coral{background:var(--coral); color:#fff; box-shadow:0 6px 28px var(--coral-soft)}
+.btn-coral:hover{filter:brightness(1.05)}
+.btn-coral:disabled{background:var(--card2); color:var(--text3); box-shadow:none; cursor:not-allowed}
+.btn-text{color:var(--text3); font-weight:500; font-size:14px; padding:14px 18px; border-radius:999px; transition:.18s}
+.btn-text:hover{color:var(--text)}
+
+.chip{display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:500; padding:6px 13px; border-radius:999px; border:1px solid var(--line2); color:var(--text2)}
+.chip.lime{color:var(--accent); border-color:var(--accent); background:var(--accent-soft)}
+.chip.coral{color:var(--coral); border-color:var(--coral); background:var(--coral-soft)}
+.chip .d{width:6px; height:6px; border-radius:50%; background:currentColor}
+.mono{font-family:var(--mono)}
+
+/* nav footer (back + primary), centered */
+.navfoot{display:flex; align-items:center; justify-content:center; gap:14px; margin-top:42px}
+
+/* thumb */
+.thumb{position:relative; border-radius:8px; overflow:hidden; background:var(--bg2); flex:none}
+.thumb .play{position:absolute; inset:0; display:grid; place-items:center}
+.thumb .play::before{content:""; width:0; height:0; border-left:11px solid rgba(255,255,255,.85); border-top:7px solid transparent; border-bottom:7px solid transparent; margin-left:2px}
+
+/* robust reveals — content is NEVER hidden by a stalled animation clock.
+   We animate transform only (opacity stays 1), so a frozen/throttled
+   compositor at worst shows content slightly offset, never blank. */
+.rise{animation:riseIn .6s var(--ease) backwards}
+@keyframes riseIn{from{transform:translateY(14px)}}
+.fadeIn{animation:fadeIn .5s var(--ease) backwards}
+@keyframes fadeIn{from{transform:translateY(6px)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes scan{0%{transform:translateY(-120%)}100%{transform:translateY(120%)}}
+@media (prefers-reduced-motion: reduce){
+  .rise,.fadeIn{animation:none}
+}
