@@ -5,7 +5,7 @@ const multer = require('multer');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 
 dotenv.config({ quiet: true });
@@ -385,18 +385,28 @@ async function saveBrollClip({ file, durationSeconds, createdAt, cleanupPaths, r
 }
 
 async function generateReelEditPlan({ reelName }) {
+  const planStartedAt = Date.now();
+  logPlan(reelName, 'start', 'received edit-plan request');
   assertPipelineConfig();
 
+  logPlan(reelName, 'box', 'creating Box client and resolving reel folder');
   const box = await createBoxClient();
   const reelsFolder = await box.getReelsFolder();
   const reelFolder = await box.getReelFolderByName(reelsFolder.id, reelName);
+  logPlan(reelName, 'box', `resolved reel folder ${reelFolder.name} (${reelFolder.id}) under reels folder ${reelsFolder.id}`);
+
+  logPlan(reelName, 'transcript', 'loading facecam transcript from Box');
   const transcriptText = await readFacecamTranscriptText(box, reelFolder);
+  logPlan(reelName, 'transcript', `loaded transcript (${transcriptText.length} chars)`);
+
   const runId = `${reelName}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   const runDir = path.join(PLAN_WORK_DIR, runId);
   await fs.mkdir(runDir, { recursive: true });
+  logPlan(reelName, 'debug', `run artifacts will be written to ${runDir}`);
 
   const transcriptPath = path.join(runDir, `script.${reelName}.txt`);
   await fs.writeFile(transcriptPath, transcriptText, 'utf8');
+  logPlan(reelName, 'debug', `wrote script file ${transcriptPath}`);
 
   const apifyInput = {
     kind: 'script',
@@ -408,11 +418,18 @@ async function generateReelEditPlan({ reelName }) {
   };
   await debugLogPayload(runDir, '01-apify-input', apifyInput);
 
+  logPlan(
+    reelName,
+    'apify',
+    `starting creator pipeline (script chars=${transcriptText.length}, concurrency=${apifyInput.options.quantifyConcurrency})`,
+  );
   const apifyReport = await runApifyPipelineForTranscript(transcriptPath);
+  logPlan(reelName, 'apify', `finished creator pipeline: ${summarizeApifyReport(apifyReport)}`);
   await debugLogPayload(runDir, '02-apify-output-report', apifyReport);
   if (!apifyReport?.recipe) {
     throw new Error('Apify pipeline did not produce a recipe. Check creator scrape and quantify results.');
   }
+  logPlan(reelName, 'apify', `recipe ready: ${summarizeRecipe(apifyReport.recipe)}`);
   await debugLogPayload(runDir, '03-apify-output-recipe', apifyReport.recipe);
 
   const apifyReportPath = path.join(runDir, `apify-report.${reelName}.json`);
@@ -422,8 +439,17 @@ async function generateReelEditPlan({ reelName }) {
 
   await writeJsonFile(apifyReportPath, apifyReport);
   await writeJsonFile(apifyRecipePath, apifyReport.recipe);
+  logPlan(reelName, 'files', `wrote local Apify report and recipe JSON`);
 
+  logPlan(reelName, 'box', 'ensuring reel output folders in Box');
   const outputFolders = await ensureReelOutputFolders(box, reelFolder.id);
+  logPlan(
+    reelName,
+    'box',
+    `output folders ready: apify=${outputFolders.apify.id}, llm=${outputFolders.llm.id}, instructions=${outputFolders.editingInstructions.id}`,
+  );
+
+  logPlan(reelName, 'box', 'uploading Apify report and recipe to Box');
   const apifyReportFile = await box.uploadFileOrVersion(
     outputFolders.apify.id,
     `apify-report.${reelName}.json`,
@@ -436,7 +462,9 @@ async function generateReelEditPlan({ reelName }) {
     apifyRecipePath,
     'application/json'
   );
+  logPlan(reelName, 'box', `uploaded Apify files: report=${apifyReportFile.id}, recipe=${apifyRecipeFile.id}`);
 
+  logPlan(reelName, 'llm-context', 'building llm-harness context from Box assets + Apify recipe');
   await runLocalCommand('npm', [
     'run',
     'llm:context:box',
@@ -447,22 +475,26 @@ async function generateReelEditPlan({ reelName }) {
     apifyRecipePath,
     '--output',
     contextPath,
-  ], { cwd: PROJECT_ROOT });
+  ], { cwd: PROJECT_ROOT, label: 'llm:context:box', streamStdout: true });
 
   const contextJson = JSON.parse(await fs.readFile(contextPath, 'utf8'));
+  logPlan(reelName, 'llm-context', `context built: ${summarizeContext(contextJson)}`);
   await debugLogPayload(runDir, '04-llm-harness-input-context', {
     command: 'npm run llm:context:box',
     recipeFile: apifyRecipePath,
     context: contextJson,
   });
 
+  logPlan(reelName, 'box', 'uploading llm-harness context to Box');
   const contextFile = await box.uploadFileOrVersion(
     outputFolders.llm.id,
     `context.${reelName}.json`,
     contextPath,
     'application/json'
   );
+  logPlan(reelName, 'box', `uploaded llm context ${contextFile.id}`);
 
+  logPlan(reelName, 'llm-plan', 'generating final edit-plan JSON with llm-harness');
   await runLocalCommand('npm', [
     'run',
     'llm:plan',
@@ -472,22 +504,27 @@ async function generateReelEditPlan({ reelName }) {
     '--output',
     editPlanPath,
     '--no-box-upload',
-  ], { cwd: PROJECT_ROOT });
+  ], { cwd: PROJECT_ROOT, label: 'llm:plan', streamStdout: true });
 
   const editPlan = JSON.parse(await fs.readFile(editPlanPath, 'utf8'));
+  const editPlanSummary = summarizeEditPlan(editPlan);
+  logPlan(reelName, 'llm-plan', `edit plan generated: ${formatSummary(editPlanSummary)}`);
   await debugLogPayload(runDir, '05-llm-harness-output-edit-plan', {
     command: 'npm run llm:plan',
     inputFile: contextPath,
     outputFile: editPlanPath,
     editPlan,
   });
+  logPlan(reelName, 'box', 'uploading final edit-plan JSON to Box');
   const editPlanFile = await box.uploadFileOrVersion(
     outputFolders.editingInstructions.id,
     `edit-plan.${reelName}.json`,
     editPlanPath,
     'application/json'
   );
+  logPlan(reelName, 'box', `uploaded edit plan ${editPlanFile.id}`);
 
+  logPlan(reelName, 'manifest', 'updating reel manifest with latest edit-plan file IDs');
   const manifestFile = await box.upsertManifest(reelFolder.id, (currentManifest) => {
     const nextManifest = baseManifest(currentManifest, reelFolder.name);
     return {
@@ -507,6 +544,7 @@ async function generateReelEditPlan({ reelName }) {
     };
   });
   const reel = await box.getReelSummary(reelFolder);
+  logPlan(reelName, 'done', `completed in ${formatDurationMs(Date.now() - planStartedAt)}`);
 
   return {
     reelName,
@@ -526,7 +564,7 @@ async function generateReelEditPlan({ reelName }) {
       manifest: miniItem(manifestFile),
     },
     debugDir: runDir,
-    editPlan: summarizeEditPlan(editPlan),
+    editPlan: editPlanSummary,
   };
 }
 
@@ -568,7 +606,7 @@ async function runApifyPipelineForTranscript(transcriptPath) {
     transcriptPath,
     '--concurrency',
     String(concurrency),
-  ], { cwd: APIFY_INTEGRATION_DIR });
+  ], { cwd: APIFY_INTEGRATION_DIR, label: 'apify:pipeline', streamStdout: false });
 
   return parseJsonFromCommandStdout(stdout);
 }
@@ -582,26 +620,61 @@ async function ensureReelOutputFolders(box, reelFolderId) {
   return { outputs, apify, llm, editingInstructions };
 }
 
-async function runLocalCommand(command, args, { cwd }) {
-  console.log(`[reelify:pipeline] running: ${command} ${args.join(' ')} (cwd=${cwd})`);
-  try {
-    const result = await execFileAsync(command, args, {
+async function runLocalCommand(command, args, { cwd, label = command, streamStdout = false }) {
+  const startedAt = Date.now();
+  const renderedCommand = `${command} ${args.join(' ')}`;
+  console.log(`[reelify:command:${label}] start ${renderedCommand} (cwd=${cwd})`);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
       cwd,
       env: process.env,
-      maxBuffer: 1024 * 1024 * 64,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    if (result.stderr) {
-      console.error(`[reelify:pipeline] stderr from ${command} ${args[1] || ''}:\n${result.stderr}`);
-    }
-    if (result.stdout && command !== 'npm') {
-      console.log(`[reelify:pipeline] stdout from ${command}:\n${result.stdout}`);
-    }
-    return result;
-  } catch (error) {
-    const stderr = error?.stderr ? `\n${error.stderr}` : '';
-    const stdout = error?.stdout ? `\n${error.stdout}` : '';
-    throw new Error(`${command} ${args.join(' ')} failed.${stderr}${stdout}`);
-  }
+    const stdoutChunks = [];
+    const stderrChunks = [];
+
+    child.stdout.on('data', (chunk) => {
+      stdoutChunks.push(chunk);
+      if (streamStdout) {
+        process.stdout.write(prefixLines(`[reelify:command:${label}:stdout] `, chunk.toString()));
+      }
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderrChunks.push(chunk);
+      process.stderr.write(prefixLines(`[reelify:command:${label}:stderr] `, chunk.toString()));
+    });
+
+    child.on('error', (error) => {
+      reject(error);
+    });
+
+    child.on('close', (code, signal) => {
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+      const elapsed = formatDurationMs(Date.now() - startedAt);
+
+      if (code === 0) {
+        console.log(`[reelify:command:${label}] done in ${elapsed}`);
+        resolve({ stdout, stderr });
+        return;
+      }
+
+      const exitLabel = signal ? `signal ${signal}` : `exit ${code}`;
+      reject(
+        new Error(
+          [
+            `${renderedCommand} failed (${exitLabel}) after ${elapsed}.`,
+            stderr ? `stderr tail:\n${tail(stderr, 4000)}` : '',
+            stdout ? `stdout tail:\n${tail(stdout, 4000)}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        ),
+      );
+    });
+  });
 }
 
 async function writeJsonFile(filePath, data) {
@@ -634,6 +707,77 @@ async function debugLogPayload(runDir, label, payload) {
   console.log(`[reelify:pipeline] ${label} BEGIN`);
   console.log(JSON.stringify(payload, null, 2));
   console.log(`[reelify:pipeline] ${label} END\n`);
+}
+
+function logPlan(reelName, stage, message) {
+  console.log(`[reelify:plan:${reelName}:${stage}] ${new Date().toISOString()} ${message}`);
+}
+
+function summarizeApifyReport(report) {
+  const perCreator = Array.isArray(report?.per_creator) ? report.per_creator : [];
+  const analyzedVideos = perCreator.reduce((total, creator) => total + (creator.videos_analyzed || 0), 0);
+  return [
+    `niche=${report?.niche?.label || 'unknown'}`,
+    `creators=${report?.creators?.length || 0}`,
+    `posts=${report?.posts?.length || 0}`,
+    `features=${report?.per_video_features?.length || 0}`,
+    `analyzedVideos=${analyzedVideos}`,
+  ].join(' ');
+}
+
+function summarizeRecipe(recipe) {
+  if (!recipe) {
+    return 'missing';
+  }
+
+  return [
+    `duration=${recipe.target_duration_s ?? recipe.durationSec ?? 'unknown'}s`,
+    `cuts=${recipe.pacing?.total_cuts ?? 'unknown'}`,
+    `captions=${recipe.captions?.present ?? 'unknown'}`,
+    `broll=${recipe.broll?.count ?? 'unknown'}`,
+    `music=${recipe.audio?.music ?? 'unknown'}`,
+  ].join(' ');
+}
+
+function summarizeContext(context) {
+  const assets = Array.isArray(context?.assets) ? context.assets : [];
+  const brollCount = assets.filter((asset) => asset.kind === 'broll').length;
+  const transcriptChars = assets
+    .filter((asset) => asset.kind === 'talking_head')
+    .reduce((total, asset) => total + String(asset.transcript || '').length, 0);
+
+  return [
+    `reel=${context?.reel?.id || 'unknown'}`,
+    `assets=${assets.length}`,
+    `broll=${brollCount}`,
+    `transcriptChars=${transcriptChars}`,
+    `target=${context?.output?.targetDurationSec || 'unknown'}s`,
+  ].join(' ');
+}
+
+function formatSummary(summary) {
+  return Object.entries(summary)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' ');
+}
+
+function formatDurationMs(ms) {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function prefixLines(prefix, text) {
+  return text
+    .split(/(\r?\n)/)
+    .map((part) => (part === '\n' || part === '\r\n' || part === '' ? part : `${prefix}${part}`))
+    .join('');
+}
+
+function tail(text, maxChars) {
+  return text.length > maxChars ? text.slice(-maxChars) : text;
 }
 
 function summarizeEditPlan(editPlan) {
