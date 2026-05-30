@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+.env
+.env.local
+
+# tesseract.js language data is fetched on first run
+eng.traineddata
+*.traineddata
+
+# local test artifacts (regeneratable)
+test-clips/

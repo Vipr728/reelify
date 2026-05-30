@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Reelify Apify — local test</title>
+<style>
+  :root {
+    --fg: #111; --muted: #6b7280; --line: #e5e7eb; --line-strong: #d1d5db;
+    --accent: #2b80ff; --accent-bg: #eff6ff;
+    --ok: #15803d; --ok-bg: #f0fdf4; --err: #b91c1c; --err-bg: #fef2f2;
+    --warn-bg: #fffbeb; --warn-border: #f59e0b;
+    --code-bg: #f6f7f9;
+  }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         color: var(--fg); max-width: 920px; margin: 32px auto; padding: 0 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  label.block { display: block; font-weight: 600; margin: 16px 0 6px; }
+  label.inline { display: inline-flex; align-items: center; gap: 6px; margin-right: 18px; }
+  .drop {
+    border: 2px dashed var(--line-strong); border-radius: 8px; padding: 28px 16px;
+    text-align: center; cursor: pointer; background: white; transition: all 0.15s;
+  }
+  .drop:hover, .drop.dragover { border-color: var(--accent); background: var(--accent-bg); }
+  .drop.has-file { border-style: solid; border-color: var(--ok); background: var(--ok-bg); }
+  .drop input[type=file] { display: none; }
+  .drop-prompt { color: var(--muted); }
+  .drop-file { font-weight: 600; }
+  .drop-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .row { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+  button { padding: 9px 18px; font: inherit; font-weight: 600; border: 1px solid var(--accent);
+           background: var(--accent); color: white; border-radius: 6px; cursor: pointer; }
+  button.secondary { background: white; color: var(--accent); }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .log { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); min-height: 20px; }
+  .stages { margin-top: 24px; }
+  .stage { border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; padding: 14px 16px;
+           background: white; transition: border-color 0.15s; }
+  .stage h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+              color: var(--muted); }
+  .stage .meta { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .stage.pending { opacity: 0.55; }
+  .stage.running { border-color: var(--accent); background: var(--accent-bg); }
+  .stage.running h3::after { content: " · running"; color: var(--accent); }
+  .stage.done { border-color: var(--ok); background: var(--ok-bg); }
+  .stage.error { border-color: var(--err); background: var(--err-bg); }
+  pre { background: var(--code-bg); padding: 10px 12px; border-radius: 4px; overflow: auto;
+        font: 12px/1.5 ui-monospace, monospace; max-height: 320px; margin: 0; white-space: pre-wrap; }
+  .instructions { background: var(--warn-bg); border-left: 4px solid var(--warn-border);
+                  padding: 10px 14px; margin: 8px 0; border-radius: 4px; }
+  .handle { font-weight: 700; color: #92400e; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
+  details summary:hover { color: var(--fg); }
+  details[open] summary { margin-bottom: 6px; }
+  progress { width: 100%; height: 6px; }
+</style>
+</head>
+<body>
+<h1>Reelify — Apify pipeline (local)</h1>
+<p class="lead">Upload a talking-head clip. We Whisper it, infer the niche, find creators on Tavily, scrape via Apify, quantify their reels (ffmpeg + OCR), and produce per-creator editing instructions.</p>
+
+<label class="block">Talking-head video (mp4 / mov)</label>
+<label class="drop" id="drop">
+  <input type="file" id="video" accept="video/mp4,video/quicktime,video/*,.mp4,.mov,.m4v" />
+  <div class="drop-prompt"><strong>Click to choose</strong> or drag a video here</div>
+  <div class="drop-meta">audio is extracted locally before sending to Whisper</div>
+</label>
+<progress id="uploadProgress" max="100" value="0" style="display:none;margin-top:8px;"></progress>
+
+<div class="row">
+  <label class="inline"><input type="checkbox" id="skipScrape" /> Skip scrape (stop after creators)</label>
+  <label class="inline"><input type="checkbox" id="skipQuantify" checked /> Skip quantify (stop after scrape)</label>
+</div>
+<div class="row">
+  <button id="run" disabled>Run pipeline</button>
+  <span class="log" id="log"></span>
+</div>
+
+<div class="stages">
+  <div class="stage pending" data-stage="transcribe"><h3>transcribe (Whisper)</h3><div class="body"></div></div>
+  <div class="stage pending" data-stage="niche"><h3>niche</h3><div class="body"></div></div>
+  <div class="stage pending" data-stage="creators"><h3>creators</h3><div class="body"></div></div>
+  <div class="stage pending" data-stage="scrape"><h3>scrape</h3><div class="body"></div></div>
+  <div class="stage pending" data-stage="quantify"><h3>quantify</h3><div class="body"></div></div>
+  <div class="stage pending" data-stage="aggregate"><h3>aggregate — per-creator instructions</h3><div class="body"></div></div>
+  <div class="stage pending" data-stage="recipe"><h3>recipe — editor LLM instruction (averaged)</h3><div class="body"></div></div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const ALL_STAGES = ['transcribe', 'niche', 'creators', 'scrape', 'quantify', 'aggregate', 'recipe'];
+const drop = $('#drop');
+const fileInput = $('#video');
+
+function escapeHtml(s) {
+  return String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+}
+function pre(obj) {
+  return '<pre>' + escapeHtml(JSON.stringify(obj, null, 2)) + '</pre>';
+}
+function setBody(name, html) {
+  $('.stage[data-stage="' + name + '"] .body').innerHTML = html;
+}
+function setState(name, state) {
+  $('.stage[data-stage="' + name + '"]').className = 'stage ' + state;
+}
+function setMeta(name, text) {
+  let m = $('.stage[data-stage="' + name + '"] .meta');
+  if (!m) {
+    m = document.createElement('div');
+    m.className = 'meta';
+    const stage = $('.stage[data-stage="' + name + '"]');
+    stage.insertBefore(m, stage.querySelector('.body'));
+  }
+  m.textContent = text;
+}
+function reset() {
+  for (const s of ALL_STAGES) { setState(s, 'pending'); setBody(s, ''); }
+  $('#log').textContent = '';
+}
+
+function setFile(f) {
+  if (!f) {
+    drop.classList.remove('has-file');
+    drop.innerHTML = `<input type="file" id="video" accept="video/*" />
+      <div class="drop-prompt"><strong>Click to choose</strong> or drag a video here</div>
+      <div class="drop-meta">audio is extracted locally before sending to Whisper</div>`;
+    wireFileInput();
+    $('#run').disabled = true;
+    return;
+  }
+  drop.classList.add('has-file');
+  drop.innerHTML = `<input type="file" id="video" accept="video/*" />
+    <div class="drop-file">${escapeHtml(f.name)}</div>
+    <div class="drop-meta">${(f.size / 1024 / 1024).toFixed(1)} MB · ${escapeHtml(f.type || 'video')}</div>`;
+  wireFileInput();
+  const dt = new DataTransfer();
+  dt.items.add(f);
+  $('#video').files = dt.files;
+  $('#run').disabled = false;
+}
+function wireFileInput() {
+  $('#video').onchange = (e) => {
+    const f = e.target.files[0];
+    if (f) setFile(f);
+  };
+}
+wireFileInput();
+
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('dragover'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  drop.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+
+$('#run').onclick = async () => {
+  const f = $('#video').files[0];
+  if (!f) { $('#log').textContent = 'choose a video first'; return; }
+
+  reset();
+  $('#run').disabled = true;
+  setState('transcribe', 'running');
+
+  const fd = new FormData();
+  fd.append('video', f);
+  fd.append('skipScrape', $('#skipScrape').checked.toString());
+  fd.append('skipQuantify', $('#skipQuantify').checked.toString());
+
+  const progress = $('#uploadProgress');
+  progress.style.display = 'block';
+  progress.value = 0;
+
+  // XHR so we can see upload progress; switch to fetch streaming after upload completes.
+  await new Promise((resolveOuter, rejectOuter) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/run');
+    xhr.responseType = 'text';
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) progress.value = (e.loaded / e.total) * 100;
+    };
+    xhr.upload.onload = () => {
+      progress.style.display = 'none';
+      $('#log').textContent = 'upload complete · server working…';
+    };
+
+    let consumed = 0;
+    let leftover = '';
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState >= 3) {
+        const chunk = xhr.responseText.slice(consumed);
+        consumed = xhr.responseText.length;
+        const combined = leftover + chunk;
+        const lines = combined.split('\n');
+        leftover = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try { handle(JSON.parse(line)); }
+          catch (e) { console.error('bad ndjson line:', line, e); }
+        }
+      }
+      if (xhr.readyState === 4) {
+        if (leftover.trim()) {
+          try { handle(JSON.parse(leftover)); } catch (e) { console.error('bad ndjson tail:', leftover, e); }
+        }
+        if (xhr.status >= 400) rejectOuter(new Error('HTTP ' + xhr.status + ' — ' + (xhr.responseText || 'no body')));
+        else resolveOuter();
+      }
+    };
+    xhr.onerror = () => rejectOuter(new Error('network error'));
+    xhr.send(fd);
+  }).catch((err) => {
+    $('#log').textContent = 'failed: ' + err.message;
+  });
+
+  $('#run').disabled = false;
+};
+
+function handle(evt) {
+  if (evt.stage === 'log') { $('#log').textContent = evt.message; return; }
+  if (evt.stage === 'start') {
+    $('#log').textContent = 'uploaded ' + (evt.bytes / 1024 / 1024).toFixed(1) + ' MB · ' + evt.filename;
+    return;
+  }
+  if (evt.stage === 'transcribe') {
+    setState('transcribe', 'done');
+    setMeta('transcribe', evt.transcript.source + ' · ' + evt.transcript.text.length + ' chars');
+    setBody('transcribe', '<div style="margin-bottom:8px;">' + escapeHtml(evt.transcript.text) + '</div>' + pre(evt.transcript));
+    setState('niche', 'running');
+    return;
+  }
+  if (evt.stage === 'niche') {
+    setState('niche', 'done');
+    setMeta('niche', evt.niche.label);
+    setBody('niche', pre(evt.niche));
+    setState('creators', 'running');
+    return;
+  }
+  if (evt.stage === 'creators') {
+    setState('creators', 'done');
+    setMeta('creators', evt.creators.length + ' found');
+    let html = '';
+    for (const c of evt.creators) {
+      html += '<div style="padding:6px 0;border-bottom:1px solid var(--line);">';
+      html += '<a href="' + escapeHtml(c.profile_url) + '" target="_blank">@' + escapeHtml(c.handle) + '</a>';
+      if (c.display_name) html += ' — ' + escapeHtml(c.display_name);
+      if (c.why) html += '<div style="color:var(--muted);font-size:12px;margin-top:2px;">' + escapeHtml(c.why) + '</div>';
+      html += '</div>';
+    }
+    html += '<details style="margin-top:8px;"><summary>raw JSON</summary>' + pre(evt.creators) + '</details>';
+    setBody('creators', html);
+    setState('scrape', 'running');
+    return;
+  }
+  if (evt.stage === 'scrape') {
+    setState('scrape', 'done');
+    setMeta('scrape', evt.posts.length + ' posts');
+    let html = '';
+    const byHandle = {};
+    for (const p of evt.posts) (byHandle[p.creator_handle] ??= []).push(p);
+    for (const handle of Object.keys(byHandle)) {
+      html += '<div class="handle">@' + escapeHtml(handle) + '</div><ul style="margin:4px 0 12px;">';
+      for (const p of byHandle[handle]) {
+        html += '<li><a href="' + escapeHtml(p.post_url) + '" target="_blank">' + escapeHtml(p.shortcode) + '</a>';
+        if (p.duration_s) html += ' · ' + p.duration_s.toFixed(0) + 's';
+        if (p.views) html += ' · ' + p.views.toLocaleString() + ' views';
+        html += '</li>';
+      }
+      html += '</ul>';
+    }
+    html += '<details><summary>raw JSON</summary>' + pre(evt.posts) + '</details>';
+    setBody('scrape', html);
+    setState('quantify', 'running');
+    return;
+  }
+  if (evt.stage === 'quantify') {
+    setState('quantify', 'done');
+    setMeta('quantify', evt.features.length + ' analyzed');
+    setBody('quantify', '<details open><summary>per-video features</summary>' + pre(evt.features) + '</details>');
+    setState('aggregate', 'running');
+    return;
+  }
+  if (evt.stage === 'aggregate') {
+    setState('aggregate', 'done');
+    setMeta('aggregate', evt.patterns.length + ' creators');
+    let html = '';
+    for (const p of evt.patterns) {
+      html += '<div class="instructions">';
+      html += '<div class="handle">@' + escapeHtml(p.creator.handle) + ' · ' + p.videos_analyzed + ' videos</div>';
+      html += '<div style="margin-top:4px;">' + escapeHtml(p.instructions) + '</div>';
+      html += '</div>';
+    }
+    html += '<details><summary>raw JSON</summary>' + pre(evt.patterns) + '</details>';
+    setBody('aggregate', html);
+    setState('recipe', 'running');
+    return;
+  }
+  if (evt.stage === 'recipe') {
+    setState('recipe', 'done');
+    const r = evt.recipe;
+    const rows = [
+      ['duration', r.target_duration_s + 's'],
+      ['pacing', r.pacing.total_cuts + ' cuts · ' + r.pacing.cuts_per_10s + '/10s · avg ' + r.pacing.avg_cut_interval_s + 's between cuts'],
+      ['pacing pattern', r.pacing.pattern],
+      ['captions', !r.captions.present ? 'no captions' :
+        r.captions.style + ' · ' + r.captions.position + ' · ' + r.captions.size_px + 'px · ' +
+        r.captions.color + (r.captions.background ? ' on ' + r.captions.background : '') +
+        (r.captions.animation ? ' · ' + r.captions.animation : '')],
+      ['b-roll', !r.broll.use ? 'no b-roll' :
+        r.broll.count + ' cutaways · avg ' + r.broll.avg_duration_s + 's · ' + r.broll.placement +
+        (r.broll.suggested_kinds?.length ? ' · kinds: ' + r.broll.suggested_kinds.join(', ') : '')],
+      ['audio', !r.audio.music ? 'no music' :
+        r.audio.suggested_genre + ' · ' + r.audio.pattern +
+        ' · start ' + r.audio.start_at_s + 's' +
+        (r.audio.end_at_s != null ? ' end ' + r.audio.end_at_s + 's' : ' to end')],
+      ['hook', r.hook.style + ' · ' + r.hook.duration_s + 's'],
+    ];
+    let html = '<table style="width:100%;border-collapse:collapse;margin-bottom:10px;">';
+    for (const [k, v] of rows) {
+      html += '<tr><td style="padding:4px 8px;border-bottom:1px solid var(--line);font-weight:600;color:var(--muted);width:130px;vertical-align:top;">' + k + '</td>';
+      html += '<td style="padding:4px 8px;border-bottom:1px solid var(--line);">' + escapeHtml(v) + '</td></tr>';
+    }
+    html += '</table>';
+    html += '<div class="instructions"><div style="font-weight:700;margin-bottom:4px;">summary for editor LLM</div>' + escapeHtml(r.summary) + '</div>';
+    if (evt.saved) {
+      html += '<div style="margin:8px 0;font-size:12px;color:var(--muted);">saved: <code>' + escapeHtml(evt.saved.recipe) + '</code></div>';
+    }
+    html += '<details><summary>raw JSON</summary>' + pre(r) + '</details>';
+    setBody('recipe', html);
+    return;
+  }
+  if (evt.stage === 'error') {
+    const running = document.querySelector('.stage.running') ?? document.querySelector('.stage.pending');
+    if (running) {
+      running.className = 'stage error';
+      running.querySelector('.body').innerHTML = '<pre>' + escapeHtml(evt.error) + '</pre>';
+    } else {
+      $('#log').textContent = 'error: ' + evt.error;
+    }
+    return;
+  }
+  if (evt.stage === 'done') {
+    document.querySelectorAll('.stage.running').forEach(el => { el.className = 'stage pending'; });
+    $('#log').textContent = 'done.';
+  }
+}
+</script>
+</body>
+</html>

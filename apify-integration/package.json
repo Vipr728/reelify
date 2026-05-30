@@ -1,0 +1,40 @@
+{
+  "name": "@reelify/apify-pipeline",
+  "version": "0.1.0",
+  "description": "Reelify Apify pipeline: transcript -> niche -> top creators -> scrape -> deterministic video feature quantify -> per-creator aggregate.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "dev": "tsx src/cli.ts",
+    "pipeline": "tsx src/cli.ts",
+    "transcribe": "tsx src/cli.ts transcribe",
+    "niche": "tsx src/cli.ts niche",
+    "creators": "tsx src/cli.ts creators",
+    "scrape": "tsx src/cli.ts scrape",
+    "quantify": "tsx src/cli.ts quantify",
+    "aggregate": "tsx src/cli.ts aggregate",
+    "synthesize": "tsx src/cli.ts synthesize",
+    "check": "tsx scripts/check.ts",
+    "test:quantify": "tsx scripts/test-quantify.ts",
+    "test:aggregate": "tsx scripts/test-aggregate.ts",
+    "test:niche": "tsx src/cli.ts niche < fixtures/sample-script.txt",
+    "test:creators": "tsx src/cli.ts creators < fixtures/sample-niche.json",
+    "test:scrape": "tsx src/cli.ts scrape < fixtures/sample-creators.json",
+    "web": "tsx scripts/web-server.ts"
+  },
+  "dependencies": {
+    "@types/busboy": "^1.5.4",
+    "apify-client": "^2.10.0",
+    "busboy": "^1.6.0",
+    "openai": "^4.71.0",
+    "tesseract.js": "^5.1.1",
+    "undici": "^6.21.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
