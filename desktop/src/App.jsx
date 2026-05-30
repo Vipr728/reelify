@@ -211,7 +211,7 @@ export default function App() {
       onBack={back}
     />,
     // Studio + Export are out of scope for this pass — still mock-backed.
-    <StudioScreen data={D} chosen={chosen} settings={settings} setSettings={setSettings} onNext={next} onBack={back} />,
+    <StudioScreen data={D} chosen={chosen} reelName={activeReel} settings={settings} setSettings={setSettings} onNext={next} onBack={back} />,
     <ExportScreen data={D} chosen={chosen} onRestart={restart} onBack={back} />,
   ][step];
 

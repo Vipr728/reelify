@@ -352,3 +352,21 @@ export async function resolveBoxAsset(uriOrId) {
 export function boxFileUrl(fileId) {
   return `${API_BASE}/api/box/file/${encodeURIComponent(fileId)}`;
 }
+
+// Generate an edit plan on the server (scrape -> quantify -> aggregate -> LLM
+// plan), then pull the full EditPlan JSON back from Box so Studio can render a
+// real timeline instead of the user hand-importing a plan.json. The whole
+// pipeline runs on real footage and is slow (several minutes), hence the long
+// timeout — it mirrors synthesizeStyle.
+export async function synthesizeEditPlan(reelName) {
+  const payload = await req(`/api/reels/${encodeURIComponent(reelName)}/edit-plan`, {
+    method: "POST",
+    timeoutMs: 900000,
+  });
+  const editPlanFile = payload?.files?.editPlan;
+  if (!editPlanFile?.id) throw new Error("Server did not return an edit-plan file.");
+  const res = await fetch(boxFileUrl(editPlanFile.id));
+  if (!res.ok) throw new Error(`Could not fetch the generated edit plan (${res.status}).`);
+  const plan = await res.json();
+  return { plan, name: editPlanFile.name || `edit-plan.${reelName}.json` };
+}

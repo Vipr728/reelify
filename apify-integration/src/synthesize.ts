@@ -49,20 +49,33 @@ const nullableStr = z.preprocess((v) => {
   return v;
 }, z.string().nullable());
 
+// Required strings the model sometimes nulls/empties when a feature is "absent".
+// Fall back to a sane default instead of failing the whole recipe.
+const strOr = (fallback: string) =>
+  z.preprocess((v) => {
+    if (v === null || v === undefined) return fallback;
+    if (typeof v === 'string' && v.trim() === '') return fallback;
+    return v;
+  }, z.string().min(1));
+
+// Enums the model sometimes nulls — coerce null/empty to a default member.
+const enumOr = <T extends [string, ...string[]]>(values: T, fallback: T[number]) =>
+  z.preprocess((v) => (v === null || v === undefined || v === '' ? fallback : v), z.enum(values));
+
 const RecipeSchema = z.object({
   target_duration_s: num.pipe(z.number().positive()),
   pacing: z.object({
     total_cuts: num.pipe(z.number().int().nonnegative()),
     cuts_per_10s: num.pipe(z.number().nonnegative()),
     avg_cut_interval_s: num.pipe(z.number().nonnegative()),
-    pattern: z.string().min(1),
+    pattern: strOr('steady'),
   }),
   captions: z.object({
     present: boolish,
-    style: z.string().min(1),
-    position: z.enum(['top', 'center', 'bottom']),
+    style: strOr('sentence'),
+    position: enumOr(['top', 'center', 'bottom'], 'bottom'),
     size_px: num.pipe(z.number().nonnegative()),
-    color: z.string().min(1),
+    color: strOr('#FFFFFF'),
     background: nullableStr,
     animation: nullableStr,
   }),
@@ -70,21 +83,21 @@ const RecipeSchema = z.object({
     use: boolish,
     count: num.pipe(z.number().int().nonnegative()),
     avg_duration_s: num.pipe(z.number().nonnegative()),
-    placement: z.string().min(1),
+    placement: strOr('evenly spaced'),
     suggested_kinds: z.array(z.string()).default([]),
   }),
   audio: z.object({
     music: boolish,
     start_at_s: num.pipe(z.number().nonnegative()),
     end_at_s: nullableNum,
-    pattern: z.enum(['throughout', 'intro-only', 'outro-only', 'gaps']),
-    suggested_genre: z.string().min(1),
+    pattern: enumOr(['throughout', 'intro-only', 'outro-only', 'gaps'], 'throughout'),
+    suggested_genre: strOr('ambient'),
   }),
   hook: z.object({
-    style: z.string().min(1),
+    style: strOr('direct statement'),
     duration_s: num.pipe(z.number().nonnegative()),
   }),
-  summary: z.string().min(1),
+  summary: strOr('Synthesized from the available creator stats.'),
 });
 
 const SYSTEM = `You are an editor briefing a downstream reel-assembly LLM that has no judgment of its own.

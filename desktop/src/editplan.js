@@ -9,10 +9,21 @@
 //                   timelineOutSec,caption:{text,emphasis[]},notes}],
 //        captionStyle, editorNotes[] }
 //
-//   B) "EditPlan" machine format (matches llm-harness output):
+//   B) "EditPlan" flat format (early machine format, used by the sample):
 //      { schemaVersion, output{aspectRatio,width,height,fps,durationSec},
 //        assets:[{id,kind,uri,boxFileId?,durationSec?}],
 //        tracks:[{id,kind:'video'|'caption',items:[...]}] }
+//
+//   C) "EditPlan" v1 format (the real llm-harness output — schema.ts EditPlanSchema):
+//      { schemaVersion:'1.0', output{...}, assets:[...],
+//        styles:{captions:[CaptionStyle]},
+//        tracks:{ video:[{id,role:'main'|'overlay',zIndex,items:[VideoItem]}],
+//                 audio:[{...}],
+//                 captions:[{id,role:'captions',zIndex,items:[CaptionItem]}] } }
+//      VideoItem  = {id,assetId,sourceInSec,sourceOutSec,timelineInSec,timelineOutSec,
+//                    playbackRate,opacity,audio,layout}
+//      CaptionItem= {id,timelineInSec,timelineOutSec,text,
+//                    tokens:[{text,timelineInSec,timelineOutSec,highlight}],styleId}
 //
 // Normalized model:
 //   { title, aspectRatio, width, height, fps, totalDuration,
@@ -157,11 +168,81 @@ function normalizeEditPlanFormat(json) {
   };
 }
 
+// Real llm-harness EditPlan: tracks is an OBJECT { video, audio, captions },
+// each a list of role-tagged tracks holding items. This is what the server's
+// edit-plan pipeline actually produces, so it is the common path.
+function normalizeEditPlanV1(json) {
+  const output = json.output || {};
+  const dims = output.width && output.height ? { width: output.width, height: output.height } : dimsForAspect(output.aspectRatio);
+
+  const assets = {};
+  (json.assets || []).forEach((a) => {
+    assets[a.id] = { id: a.id, kind: a.kind, uri: a.uri || null, boxFileId: a.boxFileId || fileIdFromUri(a.uri) };
+  });
+
+  // Keep main lane(s) before overlay lane(s) so the player's role lookups resolve.
+  const videoTracks = [...(json.tracks?.video || [])].sort((a, b) => {
+    const rank = (t) => (t.role === "main" ? 0 : 1);
+    return rank(a) - rank(b) || (a.zIndex ?? 0) - (b.zIndex ?? 0);
+  });
+  const videoLanes = videoTracks.map((t, i) => ({
+    id: t.id || `video_${i}`,
+    role: t.role === "overlay" ? "overlay" : i === 0 ? "main" : "overlay",
+    items: (t.items || []).map((it) => ({
+      id: it.id,
+      assetId: it.assetId,
+      sourceIn: it.sourceInSec ?? 0,
+      sourceOut: it.sourceOutSec ?? 0,
+      tlIn: it.timelineInSec ?? 0,
+      tlOut: it.timelineOutSec ?? 0,
+      layout: it.layout || null,
+    })),
+  }));
+
+  // Flatten every caption track's items into one ordered caption list.
+  const captions = (json.tracks?.captions || [])
+    .flatMap((track) => track.items || [])
+    .map((it) => ({
+      tlIn: it.timelineInSec ?? 0,
+      tlOut: it.timelineOutSec ?? 0,
+      text: it.text || (it.tokens || []).map((tk) => tk.text).join(" "),
+      tokens:
+        it.tokens && it.tokens.length
+          ? it.tokens.map((tk) => ({ text: tk.text, highlight: !!tk.highlight }))
+          : buildTokens(it.text, []),
+    }))
+    .sort((a, b) => a.tlIn - b.tlIn);
+
+  const maxTl = videoLanes.reduce(
+    (m, lane) => Math.max(m, lane.items.reduce((mm, it) => Math.max(mm, it.tlOut), 0)),
+    0
+  );
+  return {
+    title: json.title || output.title || "Untitled reel",
+    aspectRatio: output.aspectRatio || "9:16",
+    width: dims.width,
+    height: dims.height,
+    fps: output.fps || 30,
+    totalDuration: output.durationSec || maxTl || 1,
+    assets,
+    videoLanes,
+    captions,
+    captionStyle: json.styles?.captions?.[0] || null,
+    editorNotes: [],
+    format: "editplan",
+    raw: json,
+  };
+}
+
 export function normalizeEditPlan(json) {
   if (!json || typeof json !== "object") throw new Error("Plan is not a JSON object.");
+  // Real llm-harness EditPlan: tracks is { video, audio, captions }.
+  if (json.tracks && !Array.isArray(json.tracks) && typeof json.tracks === "object") return normalizeEditPlanV1(json);
+  // Flat EditPlan (sample/legacy): tracks is an array of {kind, items}.
   if (Array.isArray(json.tracks)) return normalizeEditPlanFormat(json);
+  // Authoring "project" format: a flat timeline array.
   if (Array.isArray(json.timeline)) return normalizeProject(json);
-  throw new Error('Unrecognized plan: expected a "tracks" array (EditPlan) or a "timeline" array (project).');
+  throw new Error('Unrecognized plan: expected a "tracks" object/array (EditPlan) or a "timeline" array (project).');
 }
 
 // A ready-to-use sample (the EditPlan example) for the "Load sample" button.

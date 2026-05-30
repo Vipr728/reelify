@@ -5,8 +5,9 @@
 // the original Studio timeline (same .studio/.player/.tl/.lane/.clip classes).
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Icon } from "../ui.jsx";
-import { gradFor, resolveBoxAsset, boxFileUrl } from "../api.js";
+import { gradFor, resolveBoxAsset, boxFileUrl, synthesizeEditPlan } from "../api.js";
 import { normalizeEditPlan, SAMPLE_PLAN } from "../editplan.js";
+import StagedLoader from "./StagedLoader.jsx";
 
 const mmss = (s) =>
   `${String(Math.floor((s || 0) / 60)).padStart(2, "0")}:${String(Math.floor((s || 0) % 60)).padStart(2, "0")}`;
@@ -16,10 +17,11 @@ function activeItem(lane, t) {
   return lane.items.find((it) => t >= it.tlIn && t < it.tlOut) || null;
 }
 
-export default function StudioScreen({ onNext, onBack }) {
+export default function StudioScreen({ reelName, onNext, onBack }) {
   const [plan, setPlan] = useState(null);
   const [fileName, setFileName] = useState("");
   const [loadError, setLoadError] = useState(null);
+  const [synthesizing, setSynthesizing] = useState(false);
   const [srcByAsset, setSrcByAsset] = useState({}); // assetId -> url | null (null = unresolved)
   const [resolving, setResolving] = useState(false);
 
@@ -56,6 +58,22 @@ export default function StudioScreen({ onNext, onBack }) {
       setPlan(null);
     }
   }, []);
+
+  // Synthesize an edit plan on the server instead of importing one by hand,
+  // then load the returned JSON straight into the timeline.
+  const onSynthesize = useCallback(async () => {
+    if (!reelName || synthesizing) return;
+    setSynthesizing(true);
+    setLoadError(null);
+    try {
+      const { plan: json, name } = await synthesizeEditPlan(reelName);
+      loadPlan(json, name);
+    } catch (e) {
+      setLoadError(e.message);
+    } finally {
+      setSynthesizing(false);
+    }
+  }, [reelName, synthesizing, loadPlan]);
 
   const onFile = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -205,13 +223,44 @@ export default function StudioScreen({ onNext, onBack }) {
 
   /* ---------- empty state: load a plan ---------- */
   if (!plan) {
+    if (synthesizing) {
+      return (
+        <div className="screen wide">
+          <StagedLoader
+            title="Synthesizing your edit plan"
+            steps={[
+              { label: "Scraping creator reels", est: 120 },
+              { label: "Quantifying pacing & captions", est: 90 },
+              { label: "Building context from Box", est: 25 },
+              { label: "Generating your edit plan", est: 40 },
+            ]}
+          />
+        </div>
+      );
+    }
     return (
       <div className="screen wide">
         <h1 className="h1 rise">Build the <em>timeline</em></h1>
         <p className="lede rise" style={{ animationDelay: ".06s" }}>
-          Drop an edit-plan JSON (EditPlan or project format). Reelify resolves each clip against your Box
-          workspace and assembles a real, playable timeline.
+          Synthesize an edit plan from your footage and master style, or drop an edit-plan JSON (EditPlan or
+          project format). Reelify resolves each clip against your Box workspace and assembles a real, playable
+          timeline.
         </p>
+
+        <button
+          className="btn btn-primary rise"
+          style={{ animationDelay: ".1s", marginBottom: 18 }}
+          disabled={!reelName}
+          onClick={onSynthesize}
+          title={reelName ? "" : "Pick a reel earlier in the flow to enable synthesis"}
+        >
+          <Icon name="zap" size={17} /> Synthesize an edit plan
+        </button>
+        {!reelName && (
+          <div className="plan-drop-sub mono rise" style={{ animationDelay: ".1s", marginBottom: 14 }}>
+            no reel selected — import one earlier to synthesize automatically
+          </div>
+        )}
 
         <div
           className="plan-drop rise"
@@ -221,7 +270,7 @@ export default function StudioScreen({ onNext, onBack }) {
           onClick={() => fileInputRef.current && fileInputRef.current.click()}
         >
           <span className="folder-ic"><Icon name="folder" size={26} /></span>
-          <div className="plan-drop-main">Drop a plan.json here, or click to choose a file</div>
+          <div className="plan-drop-main">…or drop a plan.json here, or click to choose a file</div>
           <div className="plan-drop-sub mono">accepts EditPlan (tracks) or project (timeline) JSON</div>
           <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={onFile} style={{ display: "none" }} />
         </div>
