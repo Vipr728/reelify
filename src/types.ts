@@ -96,6 +96,49 @@ export type CreatorPattern = {
   instructions: string;
 };
 
+// --- Final synthesis ---
+// One concrete recipe a downstream editor LLM can execute. Averages the
+// per-creator patterns into specific numbers/positions/colors. Produced by
+// src/synthesize.ts (which calls GPT).
+
+export type Recipe = {
+  target_duration_s: number;
+  pacing: {
+    total_cuts: number;
+    cuts_per_10s: number;
+    avg_cut_interval_s: number;
+    pattern: string; // e.g. "fast hook in first 3s, steady middle, snap outro"
+  };
+  captions: {
+    present: boolean;
+    style: string; // "word-by-word" | "sentence" | "block" | other
+    position: 'top' | 'center' | 'bottom';
+    size_px: number;
+    color: string;             // hex
+    background: string | null; // hex or null
+    animation: string | null;  // "pop-in" | "fade-in" | "static" | null
+  };
+  broll: {
+    use: boolean;
+    count: number;
+    avg_duration_s: number;
+    placement: string;          // "every ~3-4s, evenly spaced"
+    suggested_kinds: string[];  // ["screen recording", "stock footage", ...]
+  };
+  audio: {
+    music: boolean;
+    start_at_s: number;
+    end_at_s: number | null;    // null = to end of reel
+    pattern: 'throughout' | 'intro-only' | 'outro-only' | 'gaps';
+    suggested_genre: string;
+  };
+  hook: {
+    style: string;              // "rhetorical question" | "bold claim" | ...
+    duration_s: number;
+  };
+  summary: string;              // natural-language instruction paragraph
+};
+
 export type CreatorPatternReport = {
   generated_at: string;
   source: {
@@ -107,4 +150,5 @@ export type CreatorPatternReport = {
   posts: ScrapedPost[];
   per_video_features?: VideoFeatures[];
   per_creator?: CreatorPattern[];
+  recipe?: Recipe;
 };

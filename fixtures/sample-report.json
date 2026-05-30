@@ -1,0 +1,96 @@
+{
+  "generated_at": "2026-05-30T01:30:00.000Z",
+  "source": {
+    "script_text": "Hey, I'm Vihan and I want to show you exactly how I went from zero to my first thousand users on my SaaS solo in 90 days. Three lessons I had to learn the hard way...",
+    "transcript_source": "user-script"
+  },
+  "niche": {
+    "label": "solo SaaS founder build-in-public personal brand",
+    "keywords": ["solo founder", "build in public", "indie hacker", "first 1000 users", "shipping content", "saas growth"],
+    "audience": "aspiring solo founders and indie hackers, ages 18-30, who want concrete tactics for early traction",
+    "rationale": "Transcript frames a tactical solo-founder journey for early-stage builders."
+  },
+  "creators": [
+    {
+      "handle": "solofounder_creator",
+      "profile_url": "https://www.instagram.com/solofounder_creator/",
+      "display_name": "Solo Founder POV",
+      "source": "tavily",
+      "why": "Fixture creator — heavy b-roll, captions, music throughout."
+    },
+    {
+      "handle": "indiehacker_clip",
+      "profile_url": "https://www.instagram.com/indiehacker_clip/",
+      "display_name": "Indie Hacker Clips",
+      "source": "tavily",
+      "why": "Fixture creator — minimal b-roll, talking head, no captions."
+    },
+    {
+      "handle": "buildinpublic_pov",
+      "profile_url": "https://www.instagram.com/buildinpublic_pov/",
+      "display_name": "Build in Public POV",
+      "source": "tavily",
+      "why": "Fixture creator — outro music sting, moderate captions."
+    }
+  ],
+  "posts": [
+    { "creator_handle": "solofounder_creator", "post_url": "https://www.instagram.com/p/FX001/", "shortcode": "FX001", "video_url": "https://example.com/vid001.mp4", "duration_s": 26 },
+    { "creator_handle": "solofounder_creator", "post_url": "https://www.instagram.com/p/FX002/", "shortcode": "FX002", "video_url": "https://example.com/vid002.mp4", "duration_s": 24 },
+    { "creator_handle": "solofounder_creator", "post_url": "https://www.instagram.com/p/FX003/", "shortcode": "FX003", "video_url": "https://example.com/vid003.mp4", "duration_s": 28 },
+    { "creator_handle": "indiehacker_clip",    "post_url": "https://www.instagram.com/p/FX004/", "shortcode": "FX004", "video_url": "https://example.com/vid004.mp4", "duration_s": 17 },
+    { "creator_handle": "indiehacker_clip",    "post_url": "https://www.instagram.com/p/FX005/", "shortcode": "FX005", "video_url": "https://example.com/vid005.mp4", "duration_s": 19 },
+    { "creator_handle": "buildinpublic_pov",   "post_url": "https://www.instagram.com/p/FX006/", "shortcode": "FX006", "video_url": "https://example.com/vid006.mp4", "duration_s": 22 },
+    { "creator_handle": "buildinpublic_pov",   "post_url": "https://www.instagram.com/p/FX007/", "shortcode": "FX007", "video_url": "https://example.com/vid007.mp4", "duration_s": 21 }
+  ],
+  "per_video_features": [
+    {
+      "post_url": "https://www.instagram.com/p/FX001/",
+      "duration_s": 26, "cut_count": 9, "cuts_per_10s": 3.46,
+      "avg_scene_duration_s": 2.6, "longest_scene_s": 6.1, "short_scenes_ratio": 0.44,
+      "captions": { "present": true, "position": "bottom", "avg_size_px": 48, "coverage_rate": 0.8 },
+      "audio": { "has_audio": true, "coverage_rate": 0.98, "intro_active": true, "mid_active": true, "outro_active": true, "pattern": "throughout" }
+    },
+    {
+      "post_url": "https://www.instagram.com/p/FX002/",
+      "duration_s": 24, "cut_count": 8, "cuts_per_10s": 3.33,
+      "avg_scene_duration_s": 2.4, "longest_scene_s": 5.4, "short_scenes_ratio": 0.50,
+      "captions": { "present": true, "position": "bottom", "avg_size_px": 46, "coverage_rate": 1.0 },
+      "audio": { "has_audio": true, "coverage_rate": 0.97, "intro_active": true, "mid_active": true, "outro_active": true, "pattern": "throughout" }
+    },
+    {
+      "post_url": "https://www.instagram.com/p/FX003/",
+      "duration_s": 28, "cut_count": 10, "cuts_per_10s": 3.57,
+      "avg_scene_duration_s": 2.5, "longest_scene_s": 7.2, "short_scenes_ratio": 0.40,
+      "captions": { "present": true, "position": "bottom", "avg_size_px": 50, "coverage_rate": 0.8 },
+      "audio": { "has_audio": true, "coverage_rate": 0.96, "intro_active": true, "mid_active": true, "outro_active": true, "pattern": "throughout" }
+    },
+    {
+      "post_url": "https://www.instagram.com/p/FX004/",
+      "duration_s": 17, "cut_count": 3, "cuts_per_10s": 1.76,
+      "avg_scene_duration_s": 4.3, "longest_scene_s": 9.0, "short_scenes_ratio": 0.0,
+      "captions": { "present": false, "position": "none", "avg_size_px": 0, "coverage_rate": 0.2 },
+      "audio": { "has_audio": true, "coverage_rate": 0.95, "intro_active": true, "mid_active": true, "outro_active": true, "pattern": "throughout" }
+    },
+    {
+      "post_url": "https://www.instagram.com/p/FX005/",
+      "duration_s": 19, "cut_count": 4, "cuts_per_10s": 2.11,
+      "avg_scene_duration_s": 3.8, "longest_scene_s": 8.2, "short_scenes_ratio": 0.20,
+      "captions": { "present": false, "position": "none", "avg_size_px": 0, "coverage_rate": 0.0 },
+      "audio": { "has_audio": true, "coverage_rate": 0.93, "intro_active": true, "mid_active": true, "outro_active": true, "pattern": "throughout" }
+    },
+    {
+      "post_url": "https://www.instagram.com/p/FX006/",
+      "duration_s": 22, "cut_count": 6, "cuts_per_10s": 2.72,
+      "avg_scene_duration_s": 3.1, "longest_scene_s": 7.5, "short_scenes_ratio": 0.28,
+      "captions": { "present": true, "position": "center", "avg_size_px": 38, "coverage_rate": 0.6 },
+      "audio": { "has_audio": true, "coverage_rate": 0.42, "intro_active": false, "mid_active": false, "outro_active": true, "pattern": "outro-only" }
+    },
+    {
+      "post_url": "https://www.instagram.com/p/FX007/",
+      "duration_s": 21, "cut_count": 5, "cuts_per_10s": 2.38,
+      "avg_scene_duration_s": 3.5, "longest_scene_s": 7.0, "short_scenes_ratio": 0.20,
+      "captions": { "present": true, "position": "center", "avg_size_px": 40, "coverage_rate": 0.8 },
+      "audio": { "has_audio": true, "coverage_rate": 0.46, "intro_active": false, "mid_active": false, "outro_active": true, "pattern": "outro-only" }
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import { findTopCreators } from './creators.js';
 import { scrapeCreators } from './scrape.js';
 import { quantifyPosts } from './quantify.js';
 import { aggregateByCreator } from './aggregate.js';
+import { synthesizeRecipe } from './synthesize.js';
 import type { CreatorPatternReport } from './types.js';
 
 // End-to-end Apify pipeline:
@@ -14,9 +15,11 @@ import type { CreatorPatternReport } from './types.js';
 //     -> scraped posts (Apify IG profile actor)
 //     -> per-video features (deterministic: ffmpeg + OCR, no LLM)
 //     -> per-creator aggregate + instructions
+//     -> single synthesized Recipe (GPT) ready for the editor LLM
 
 export type PipelineOpts = {
-  skipQuantify?: boolean; // for fast iteration on the front half
+  skipQuantify?: boolean;
+  skipSynthesize?: boolean;
   quantifyConcurrency?: number;
 };
 
@@ -44,5 +47,10 @@ export async function runApifyPipeline(
 
   report.per_video_features = features;
   report.per_creator = perCreator;
+
+  if (opts.skipSynthesize) return report;
+  if (perCreator.some((p) => p.videos_analyzed > 0)) {
+    report.recipe = await synthesizeRecipe(report);
+  }
   return report;
 }

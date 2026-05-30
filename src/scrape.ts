@@ -3,8 +3,10 @@ import { loadEnv } from './env.js';
 import type { Creator, ScrapedPost } from './types.js';
 
 // Initial Apify scrape: hit each creator's profile, pull the most recent N posts.
-// Downstream `quantify` step is what actually extracts video features —
-// this step is just the raw fetch.
+// We default to `apify/instagram-scraper` because it returns flat post items
+// keyed by `ownerUsername` + `url` + `videoUrl` — the shape we parse.
+// The older `apify/instagram-profile-scraper` returns nested profile objects
+// with `latestPosts` arrays instead, which would silently yield zero posts here.
 
 type RawIgItem = {
   url?: string;
@@ -16,40 +18,73 @@ type RawIgItem = {
   likesCount?: number;
   commentsCount?: number;
   videoViewCount?: number;
+  videoPlayCount?: number;
   videoDuration?: number;
   timestamp?: string;
   type?: string; // 'Video' | 'Image' | 'Sidecar'
+  productType?: string; // 'clips' = Reels
 };
 
 export async function scrapeCreators(creators: Creator[]): Promise<ScrapedPost[]> {
   const env = loadEnv();
   const client = new ApifyClient({ token: env.APIFY_TOKEN });
 
+  if (creators.length === 0) {
+    console.error('[apify] no creators to scrape');
+    return [];
+  }
+
   const input = {
-    usernames: creators.map((c) => c.handle),
+    directUrls: creators.map((c) => `https://www.instagram.com/${c.handle}/`),
     resultsType: 'posts',
     resultsLimit: env.APIFY_POSTS_PER_PROFILE,
-    onlyPostsNewerThan: '180 days',
+    addParentData: false,
+    searchType: 'user',
+    searchLimit: 1,
   };
 
-  // Actor ids accept the slash form ("apify/instagram-profile-scraper").
-  const run = await client.actor(env.APIFY_IG_PROFILE_ACTOR).call(input, {
-    waitSecs: 600,
-  });
+  console.error(
+    `[apify] starting ${env.APIFY_IG_ACTOR} for ${creators.length} creators ` +
+      `(${env.APIFY_POSTS_PER_PROFILE} posts each)`,
+  );
+
+  const run = await client.actor(env.APIFY_IG_ACTOR).call(input, { waitSecs: 600 });
+
+  console.error(
+    `[apify] run ${run.id} status=${run.status} dataset=${run.defaultDatasetId} ` +
+      `started=${run.startedAt} finished=${run.finishedAt}`,
+  );
 
   if (!run.defaultDatasetId) {
-    throw new Error('apify run finished without a dataset');
+    throw new Error(`apify run ${run.id} finished without a dataset (status=${run.status})`);
   }
 
   const { items } = await client.dataset<RawIgItem>(run.defaultDatasetId).listItems();
+  console.error(`[apify] dataset returned ${items.length} raw items`);
 
   const handles = new Set(creators.map((c) => c.handle.toLowerCase()));
   const posts: ScrapedPost[] = [];
 
+  let skippedNoOwner = 0;
+  let skippedNotInList = 0;
+  let skippedNotVideo = 0;
+
   for (const it of items) {
-    if (!it.ownerUsername || !it.url) continue;
-    if (!handles.has(it.ownerUsername.toLowerCase())) continue;
-    if (it.type && it.type !== 'Video') continue;
+    if (!it.url) continue;
+    if (!it.ownerUsername) {
+      skippedNoOwner++;
+      continue;
+    }
+    if (!handles.has(it.ownerUsername.toLowerCase())) {
+      skippedNotInList++;
+      continue;
+    }
+    const isVideo =
+      it.type === 'Video' || it.productType === 'clips' || !!it.videoUrl;
+    if (!isVideo) {
+      skippedNotVideo++;
+      continue;
+    }
 
     posts.push({
       creator_handle: it.ownerUsername,
@@ -60,11 +95,16 @@ export async function scrapeCreators(creators: Creator[]): Promise<ScrapedPost[]
       caption: it.caption,
       likes: it.likesCount,
       comments: it.commentsCount,
-      views: it.videoViewCount,
+      views: it.videoViewCount ?? it.videoPlayCount,
       duration_s: it.videoDuration,
       timestamp: it.timestamp,
     });
   }
+
+  console.error(
+    `[apify] kept ${posts.length} video posts ` +
+      `(skipped: no-owner=${skippedNoOwner}, not-in-list=${skippedNotInList}, not-video=${skippedNotVideo})`,
+  );
 
   return posts;
 }

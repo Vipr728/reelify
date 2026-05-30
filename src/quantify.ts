@@ -93,19 +93,19 @@ async function ocrFrame(
   return { yCentroid, avgHeightPx };
 }
 
-async function quantifyOne(
-  post: ScrapedPost,
+// Analyze an already-on-disk video file. Doesn't download, doesn't clean up.
+// Reusable for the local-file test runner (no Apify needed).
+export async function analyzeFile(
+  file: string,
+  postUrl: string,
   worker: TesseractWorker,
 ): Promise<VideoFeatures> {
-  if (!post.video_url) return emptyFeatures(post, 'no-video-url');
-
-  let file: string;
-  try {
-    file = await downloadToTemp(post.video_url);
-  } catch {
-    return emptyFeatures(post, 'download-failed');
-  }
-
+  const post: ScrapedPost = {
+    creator_handle: '',
+    post_url: postUrl,
+    shortcode: '',
+    video_url: postUrl,
+  };
   const frameDir = await fs.mkdtemp(path.join(os.tmpdir(), 'reelify-frames-'));
   try {
     const [duration, dims, cutTimes, silence, audioStream] = await Promise.all([
@@ -194,11 +194,39 @@ async function quantifyOne(
         pattern,
       },
     };
+  } finally {
+    await fs.rm(frameDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function quantifyOne(
+  post: ScrapedPost,
+  worker: TesseractWorker,
+): Promise<VideoFeatures> {
+  if (!post.video_url) return emptyFeatures(post, 'no-video-url');
+
+  let file: string;
+  try {
+    file = await downloadToTemp(post.video_url);
+  } catch {
+    return emptyFeatures(post, 'download-failed');
+  }
+  try {
+    return await analyzeFile(file, post.post_url, worker);
   } catch {
     return emptyFeatures(post, 'ffmpeg-failed');
   } finally {
-    await fs.rm(frameDir, { recursive: true, force: true }).catch(() => {});
     await fs.rm(file, { force: true }).catch(() => {});
+  }
+}
+
+// Convenience for the local-file test loop: analyze one mp4 already on disk.
+export async function quantifyLocalFile(filePath: string): Promise<VideoFeatures> {
+  const worker = await createWorker('eng');
+  try {
+    return await analyzeFile(filePath, `file://${path.resolve(filePath)}`, worker);
+  } finally {
+    await worker.terminate();
   }
 }
 

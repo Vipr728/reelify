@@ -1,10 +1,17 @@
 import { z } from 'zod';
 
+// Load .env if present (Node >= 20.6). No-op if file or method is missing.
+try {
+  (process as { loadEnvFile?: (p: string) => void }).loadEnvFile?.('.env');
+} catch {
+  /* missing .env is fine — env may be exported in the shell instead */
+}
+
 const schema = z.object({
   OPENAI_API_KEY: z.string().min(1),
   TAVILY_API_KEY: z.string().min(1),
   APIFY_TOKEN: z.string().min(1),
-  APIFY_IG_PROFILE_ACTOR: z.string().default('apify/instagram-profile-scraper'),
+  APIFY_IG_ACTOR: z.string().default('apify/instagram-scraper'),
   APIFY_POSTS_PER_PROFILE: z.coerce.number().int().positive().default(10),
   TAVILY_TOP_N: z.coerce.number().int().positive().default(5),
 });

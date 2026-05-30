@@ -1,96 +1,121 @@
 # Reelify — Apify pipeline
 
-Front half of Reelify, on its own branch. Turns the user's script (or talking-head video) into a `CreatorPatternReport`: niche → top creators → their scraped posts → **deterministic per-video features** → **per-creator instructions** the harness LLM can paste straight into its prompt.
+Front half of Reelify, on its own branch. Upload a talking-head clip; out comes a `Recipe` JSON — a concrete editor brief (cuts, captions, b-roll, audio, hook) averaged from the top creators in the user's niche. The harness LLM consumes that recipe to assemble the final reel.
 
-Quantify is **not** an LLM. It's ffmpeg + OCR producing plain numbers like "captions ~46px at bottom, ~3.2 cuts per 10s, audio throughout."
+Quantify is **deterministic** — ffmpeg + tesseract.js OCR, no LLM. Only the first and last steps (niche/creator-rank, recipe) hit GPT.
 
 ```
-script | video
+mp4 upload (or script string)
    │
-   ▼ transcribe                   (Whisper if video, passthrough if text)
+   ▼ transcribe                   (ffmpeg strip audio → Whisper)
    │
    ▼ inferNiche                   (OpenAI → { label, keywords, audience })
    │
-   ▼ findTopCreators              (Tavily + GPT extract → Creator[])
+   ▼ findTopCreators              (Tavily search → handles extracted from real
+   │                                instagram.com/* URLs → GPT ranks)
    │
-   ▼ scrapeCreators               (Apify IG profile actor → ScrapedPost[])
+   ▼ scrapeCreators               (Apify apify/instagram-scraper → ScrapedPost[])
    │
-   ▼ quantifyPosts                ── deterministic, per video:
+   ▼ quantifyPosts                deterministic, per video:
    │      • duration_s
    │      • cut_count, cuts_per_10s, avg_scene_duration_s
    │      • short_scenes_ratio          (proxy for b-roll cutaway density)
    │      • longest_scene_s             (longest talking-head segment)
    │      • captions: present, position (top/center/bottom), avg_size_px, coverage_rate
-   │      • audio: has_audio, intro/mid/outro active, pattern (throughout / intro-only / outro-only / gaps / silent)
+   │      • audio: intro/mid/outro active, pattern
    │
-   ▼ aggregateByCreator           → CreatorPattern with `instructions` string
+   ▼ aggregateByCreator           pure-compute averages + short `instructions` text
    │
-   ▼ CreatorPatternReport.json    ← the harness reads this file
+   ▼ synthesizeRecipe             one GPT call → ONE concrete Recipe:
+          • target_duration_s
+          • pacing { total_cuts, cuts_per_10s, pattern }
+          • captions { style, position, size_px, color, background, animation }
+          • broll { count, avg_duration_s, placement, suggested_kinds }
+          • audio { music, start_at_s, pattern, suggested_genre }
+          • hook { style, duration_s }
+          • summary (paragraph for the editor LLM)
 ```
 
 ## Setup
 
-Requires **ffmpeg** and **ffprobe** on PATH:
-
-```bash
-brew install ffmpeg
-```
-
-Then:
+Requires **ffmpeg** + **ffprobe** on PATH (`brew install ffmpeg`).
 
 ```bash
 cp .env.example .env   # OPENAI_API_KEY, TAVILY_API_KEY, APIFY_TOKEN
 npm install
 ```
 
-First quantify run downloads ~5 MB of Tesseract English language data.
+First quantify run downloads ~5 MB of Tesseract English language data (gitignored).
 
 ## Run
 
+### Web app (easiest)
+
 ```bash
-# Full pipeline from a script
-npm run pipeline -- --script "Today I'm gonna show you how I built my SaaS solo..."
-
-# From a video
-npm run pipeline -- --video ~/Downloads/my-reel.mp4
-
-# Fast: skip the quantify step (front half only)
-npm run pipeline -- --skip-quantify --script "..."
-
-# Tune quantify concurrency (default 3)
-npm run pipeline -- --concurrency 5 --script "..."
+npm run web    # http://localhost:5173
 ```
 
-Output lands at `out/report-<ts>.json` and on stdout.
+Drop in an mp4. Each stage card lights up live; the final card shows the recipe parameters in a table + a saved-file path. Reports land in `out/report-<ts>.json` and `out/recipe-<ts>.json`.
 
-## Per-step CLI
+### CLI
+
+```bash
+npm run pipeline -- --video ~/Downloads/my-reel.mp4          # full pipeline
+npm run pipeline -- --script "Today I'm gonna show you..."    # script instead of video
+npm run pipeline -- --skip-quantify --script "..."            # stop after scrape (no ffmpeg work)
+npm run pipeline -- --skip-synthesize --script "..."          # stop before final GPT recipe
+npm run pipeline -- --concurrency 5 --script "..."            # parallelize quantify
+```
+
+Writes `out/report-<ts>.json` (full) and `out/recipe-<ts>.json` (just the editor instruction).
+
+### Per-step CLI
 
 ```bash
 npm run transcribe -- ~/Downloads/clip.mp4
 npm run niche -- "transcript text..."
-echo '<niche-json>'    | npm run creators
-echo '<creators-json>' | npm run scrape
-echo '<posts-json>'    | npm run quantify
-echo '<report-json-with-features>' | npm run aggregate
+echo '<niche-json>'                              | npm run creators
+echo '<creators-json>'                           | npm run scrape
+echo '<posts-json>'                              | npm run quantify
+echo '<report-json-with-features>'               | npm run aggregate
+echo '<report-json-with-per-creator>'            | npm run synthesize
 ```
 
-## What the harness reads
+## Local test loop (no APIs needed)
 
-`per_creator[i].instructions` is the punchline — a short string ready to paste in a prompt. Example:
-
+```bash
+npm run check                                                # env + ffmpeg sanity
+npm run test:aggregate                                       # aggregate against fixtures/sample-report.json
+npm run test:quantify -- --file path/to/my-reel.mp4          # real ffmpeg + OCR on a local file
+npm run test:niche                                           # pipes fixtures/sample-script.txt → OpenAI
+npm run test:creators                                        # pipes fixtures/sample-niche.json → Tavily + OpenAI
+npm run test:scrape                                          # pipes fixtures/sample-creators.json → Apify (costs minutes)
 ```
-Target duration ~24s. Pacing: ~3.2 cuts per 10s (avg scene 2.4s, longest scene 6.1s).
-B-roll cutaways: 43% of scenes are < 2s — heavy b-roll usage.
-Captions: yes, positioned bottom, ~46px tall, visible ~84% of the time.
-Music/audio placement: audio (likely background music or constant VO) throughout.
+
+`fixtures/sample-report.json` has fabricated per-video features so `test:aggregate` is fully offline.
+
+## What the editor LLM consumes
+
+The harness reads `out/recipe-<ts>.json`. Shape:
+
+```jsonc
+{
+  "target_duration_s": 24,
+  "pacing": { "total_cuts": 8, "cuts_per_10s": 3.3, "avg_cut_interval_s": 3.0, "pattern": "fast hook in first 3s, steady middle, snap outro" },
+  "captions": { "present": true, "style": "word-by-word", "position": "bottom", "size_px": 48, "color": "#ffffff", "background": "#000000cc", "animation": "pop-in" },
+  "broll":    { "use": true, "count": 4, "avg_duration_s": 1.8, "placement": "every ~5s, evenly spaced", "suggested_kinds": ["screen recording", "stock footage"] },
+  "audio":    { "music": true, "start_at_s": 0, "end_at_s": null, "pattern": "throughout", "suggested_genre": "lofi hip-hop" },
+  "hook":     { "style": "rhetorical question", "duration_s": 3 },
+  "summary":  "..."
+}
 ```
 
-If you want the raw numbers (you will, for finer control), every field that produced that sentence is also in `per_creator[i].avg` and `per_creator[i].dominant`.
+The full `report-<ts>.json` keeps every intermediate (scraped posts, per-video features, per-creator aggregates) alongside the recipe.
 
 ## Notes
 
-- Caption detection is OCR on 5 sampled frames per video — fast and cheap, but a stylized burned-in font can fool it. Tune `OCR_CONFIDENCE` / `FRAME_SAMPLES` in `quantify.ts` if you see false negatives.
-- "Music placement" is really *audio activity placement*: we don't separate music from speech without ML. The pattern (`throughout` / `intro-only` / `outro-only` / `gaps`) is what's reliable; treat the label as guidance, not a music classifier.
-- "B-roll cut pattern" is approximated by short-scene density (`short_scenes_ratio`). A reel with 40%+ short scenes almost always has cutaways; a low number means mostly talking head.
-- The Apify scrape pulls minutes. Use `--skip-quantify` while iterating on the front half.
-- This service is server-side. Don't import it from the RN app.
+- Caption detection is OCR on 5 sampled frames per video — fast and cheap, but a stylized burned-in font can fool it. Tune `OCR_CONFIDENCE` / `FRAME_SAMPLES` in `src/quantify.ts` if you see false negatives.
+- "Audio placement" is `audio-active` placement, not music-vs-speech classification. The pattern (`throughout` / `intro-only` / `outro-only` / `gaps`) is what's reliable; the genre suggestion comes from GPT in the synthesize step.
+- "B-roll cut pattern" is approximated by short-scene density (`short_scenes_ratio`). 40%+ short scenes → heavy cutaways; low → mostly talking head.
+- Apify scrape takes minutes per run. Use `--skip-quantify` (or the UI checkbox) when iterating on the front half.
+- The web app is local-dev only — no auth, no rate limit. Don't expose to the internet.

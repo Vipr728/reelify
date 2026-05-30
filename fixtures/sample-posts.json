@@ -1,0 +1,24 @@
+[
+  {
+    "creator_handle": "solofounder_creator",
+    "post_url": "https://www.instagram.com/p/FIXTURE001/",
+    "shortcode": "FIXTURE001",
+    "video_url": "REPLACE_WITH_LOCAL_PATH_OR_PUBLIC_MP4",
+    "caption": "3 lessons from 90 days shipping solo",
+    "likes": 14200,
+    "comments": 184,
+    "views": 421000,
+    "duration_s": 26
+  },
+  {
+    "creator_handle": "indiehacker_clip",
+    "post_url": "https://www.instagram.com/p/FIXTURE002/",
+    "shortcode": "FIXTURE002",
+    "video_url": "REPLACE_WITH_LOCAL_PATH_OR_PUBLIC_MP4",
+    "caption": "Stop launching, start compounding",
+    "likes": 8400,
+    "comments": 91,
+    "views": 198000,
+    "duration_s": 18
+  }
+]

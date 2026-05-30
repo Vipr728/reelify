@@ -13,10 +13,20 @@
     "creators": "tsx src/cli.ts creators",
     "scrape": "tsx src/cli.ts scrape",
     "quantify": "tsx src/cli.ts quantify",
-    "aggregate": "tsx src/cli.ts aggregate"
+    "aggregate": "tsx src/cli.ts aggregate",
+    "synthesize": "tsx src/cli.ts synthesize",
+    "check": "tsx scripts/check.ts",
+    "test:quantify": "tsx scripts/test-quantify.ts",
+    "test:aggregate": "tsx scripts/test-aggregate.ts",
+    "test:niche": "tsx src/cli.ts niche < fixtures/sample-script.txt",
+    "test:creators": "tsx src/cli.ts creators < fixtures/sample-niche.json",
+    "test:scrape": "tsx src/cli.ts scrape < fixtures/sample-creators.json",
+    "web": "tsx scripts/web-server.ts"
   },
   "dependencies": {
+    "@types/busboy": "^1.5.4",
     "apify-client": "^2.10.0",
+    "busboy": "^1.6.0",
     "openai": "^4.71.0",
     "tesseract.js": "^5.1.1",
     "undici": "^6.21.0",

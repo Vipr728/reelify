@@ -1,0 +1,23 @@
+[
+  {
+    "handle": "solofounder_creator",
+    "profile_url": "https://www.instagram.com/solofounder_creator/",
+    "display_name": "Solo Founder POV",
+    "source": "tavily",
+    "why": "Fixture creator — posts daily build-in-public solo SaaS content."
+  },
+  {
+    "handle": "indiehacker_clip",
+    "profile_url": "https://www.instagram.com/indiehacker_clip/",
+    "display_name": "Indie Hacker Clips",
+    "source": "tavily",
+    "why": "Fixture creator — short-form lessons from shipping side projects."
+  },
+  {
+    "handle": "buildinpublic_pov",
+    "profile_url": "https://www.instagram.com/buildinpublic_pov/",
+    "display_name": "Build in Public POV",
+    "source": "tavily",
+    "why": "Fixture creator — behind-the-scenes founder POV with b-roll cutaways."
+  }
+]

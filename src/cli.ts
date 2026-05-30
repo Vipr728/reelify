@@ -6,6 +6,7 @@ import { findTopCreators } from './creators.js';
 import { scrapeCreators } from './scrape.js';
 import { quantifyPosts } from './quantify.js';
 import { aggregateByCreator } from './aggregate.js';
+import { synthesizeRecipe } from './synthesize.js';
 import { runApifyPipeline } from './pipeline.js';
 
 // Usage:
@@ -79,10 +80,15 @@ async function main() {
 
     const report = await runApifyPipeline(input, {
       skipQuantify: flags['skip-quantify'] === true,
+      skipSynthesize: flags['skip-synthesize'] === true,
       quantifyConcurrency: flags.concurrency ? Number(flags.concurrency) : undefined,
     });
     const out = writeOut('report', report);
     console.error(`wrote ${out}`);
+    if (report.recipe) {
+      const recipeOut = writeOut('recipe', report.recipe);
+      console.error(`wrote ${recipeOut}`);
+    }
     console.log(JSON.stringify(report, null, 2));
     return;
   }
@@ -130,6 +136,14 @@ async function main() {
         2,
       ),
     );
+    return;
+  }
+  if (cmd === 'synthesize') {
+    const report = (await readJsonArg(rest)) as Parameters<typeof synthesizeRecipe>[0];
+    if (!report?.per_creator) {
+      throw new Error('synthesize: report must include per_creator (run aggregate first)');
+    }
+    console.log(JSON.stringify(await synthesizeRecipe(report), null, 2));
     return;
   }
 
