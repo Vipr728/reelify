@@ -24,7 +24,11 @@ Steps you take internally:
 3. Write 3-5 SEARCH QUERIES targeting Instagram creator-discovery sites
    (instagram.com, socialblade.com, hypeauditor.com, creatordb.app). Vary the angle:
    one narrow, one broad, one with a specific format ("reels"/"motivational"/"founder story"),
-   one with a city or sub-segment if it fits. Each query should be a single line of text.
+   one with a sub-segment of the niche if it fits. Each query should be a single
+   complete searchable phrase a human would type.
+
+   NEVER use placeholders. Do NOT emit "[City]", "<topic>", "[name]", or any
+   bracketed/template token. If you can't fill a slot concretely, drop that query.
 4. List 2-5 ADJACENT niches the creator's audience overlaps with — used as fallback if
    the primary queries don't find enough real handles.
 
