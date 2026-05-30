@@ -1,29 +1,41 @@
-# secrets
-.env
-.env.local
-*.env
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
-# node
+# dependencies
 node_modules/
-npm-debug.log*
-yarn-error.log*
 
-# expo / rn
-app/.expo/
-app/dist/
-app/web-build/
-app/ios/Pods/
-app/ios/build/
-app/android/
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
 *.jks
 *.p8
 *.p12
+*.key
 *.mobileprovision
-*.orig.*
 
-# misc
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
 .DS_Store
-*.log
+*.pem
 
-# supabase CLI temp
-supabase/.temp/
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
