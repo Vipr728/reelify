@@ -561,6 +561,7 @@ async function runApifyPipelineForTranscript(transcriptPath) {
   const concurrency = Number.isFinite(APIFY_QUANTIFY_CONCURRENCY) ? APIFY_QUANTIFY_CONCURRENCY : 3;
   const { stdout } = await runLocalCommand('npm', [
     'run',
+    '--silent',
     'pipeline:json',
     '--',
     '--script-file',
@@ -569,7 +570,7 @@ async function runApifyPipelineForTranscript(transcriptPath) {
     String(concurrency),
   ], { cwd: APIFY_INTEGRATION_DIR });
 
-  return JSON.parse(stdout);
+  return parseJsonFromCommandStdout(stdout);
 }
 
 async function ensureReelOutputFolders(box, reelFolderId) {
@@ -605,6 +606,25 @@ async function runLocalCommand(command, args, { cwd }) {
 
 async function writeJsonFile(filePath, data) {
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
+
+function parseJsonFromCommandStdout(stdout) {
+  const text = stdout.trim();
+  if (!text) {
+    throw new Error('Expected JSON on stdout, but command produced no stdout.');
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      return JSON.parse(text.slice(start, end + 1));
+    }
+
+    throw new Error(`Expected JSON on stdout, but got:\n${text.slice(0, 1000)}`);
+  }
 }
 
 async function debugLogPayload(runDir, label, payload) {
