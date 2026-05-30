@@ -7,6 +7,9 @@ const fsSync = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { transcribeVideo } = require('./transcribe');
+const renderJobs = require('./render/jobs');
+const { executeRender } = require('./render/executor');
 
 dotenv.config({ quiet: true });
 
@@ -17,6 +20,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const TMP_ROOT = path.join(__dirname, '.tmp');
 const UPLOAD_DIR = path.join(TMP_ROOT, 'uploads');
 const WORK_DIR = path.join(TMP_ROOT, 'work');
+const RENDER_WORK_DIR = path.join(TMP_ROOT, 'render');
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const BOX_API_BASE = 'https://api.box.com/2.0';
 const BOX_UPLOAD_BASE = 'https://upload.box.com/api/2.0';
@@ -24,6 +28,7 @@ const OPENAI_MODEL = process.env.OPENAI_BROLL_MODEL || 'gpt-4.1-mini';
 
 fsSync.mkdirSync(UPLOAD_DIR, { recursive: true });
 fsSync.mkdirSync(WORK_DIR, { recursive: true });
+fsSync.mkdirSync(RENDER_WORK_DIR, { recursive: true });
 
 const upload = multer({
   dest: UPLOAD_DIR,
@@ -83,6 +88,158 @@ app.post('/api/reels', async (_request, response) => {
   }
 });
 
+// --- TEMP Phase 2 render-test endpoints. Replaced by /api/reels/:id/render in Phase 3. ---
+app.post('/render/_test', express.json({ limit: '4mb' }), async (request, response) => {
+  try {
+    const plan = request.body?.plan;
+    const reelName = normalizeOptionalReelName(request.body?.reelName);
+    if (!plan || typeof plan !== 'object') {
+      response.status(400).json({ error: 'Body must include a "plan" object (EditPlan).' });
+      return;
+    }
+    if (!reelName) {
+      response.status(400).json({ error: '"reelName" is required.' });
+      return;
+    }
+
+    const box = await createBoxClient();
+    const reelsFolder = await box.getReelsFolder();
+    const reelFolder = await box.getReelFolderByName(reelsFolder.id, reelName);
+
+    const job = renderJobs.createJob({ reelName, params: { source: 'test', planSummary: summarizePlan(plan) } });
+    renderJobs.runJob(job.id, async (report) => {
+      report('rendering', 'Starting render', { progress: 10 });
+      const result = await executeRender({
+        plan,
+        reelFolderId: reelFolder.id,
+        reelName: reelFolder.name,
+        jobId: job.id,
+        box,
+        workRoot: RENDER_WORK_DIR,
+        report,
+      });
+      renderJobs.updateJob(job.id, {
+        status: 'done',
+        message: 'Render complete',
+        progress: 100,
+        result,
+      });
+    });
+
+    response.json({ ok: true, jobId: job.id, status: job.status });
+  } catch (error) {
+    console.error(error);
+    response.status(500).json({ error: getPublicErrorMessage(error) });
+  }
+});
+
+app.get('/render/jobs/:jobId', (request, response) => {
+  const job = renderJobs.getJob(request.params.jobId);
+  if (!job) {
+    response.status(404).json({ error: `Job not found: ${request.params.jobId}` });
+    return;
+  }
+  response.json({ ok: true, job });
+});
+
+app.get('/render/jobs', (request, response) => {
+  const { reelName, limit } = request.query;
+  response.json({
+    ok: true,
+    jobs: renderJobs.listJobs({
+      reelName: typeof reelName === 'string' ? reelName : undefined,
+      limit: limit ? Number(limit) : undefined,
+    }),
+  });
+});
+
+function summarizePlan(plan) {
+  if (!plan || typeof plan !== 'object') return null;
+  try {
+    return {
+      durationSec: plan?.output?.durationSec,
+      assets: Array.isArray(plan.assets) ? plan.assets.length : 0,
+      videoItems: countTrackItems(plan?.tracks?.video),
+      audioItems: countTrackItems(plan?.tracks?.audio),
+      captionItems: countTrackItems(plan?.tracks?.captions),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function countTrackItems(tracks) {
+  if (!Array.isArray(tracks)) return 0;
+  return tracks.reduce((sum, track) => sum + (Array.isArray(track?.items) ? track.items.length : 0), 0);
+}
+
+app.get('/api/reels/:reelName/clips/:clipId/status', async (request, response) => {
+  try {
+    const reelName = normalizeOptionalReelName(request.params.reelName);
+    if (!reelName) {
+      response.status(400).json({ error: 'reelName is required' });
+      return;
+    }
+    const clipId = String(request.params.clipId || '').trim();
+    if (!clipId) {
+      response.status(400).json({ error: 'clipId is required' });
+      return;
+    }
+
+    const box = await createBoxClient();
+    const reelsFolder = await box.getReelsFolder();
+    const reelFolder = await box.getReelFolderByName(reelsFolder.id, reelName);
+    const manifest = await box.downloadManifest(reelFolder.id);
+    if (!manifest) {
+      response.status(404).json({ error: 'Reel manifest not found' });
+      return;
+    }
+
+    if (clipId === 'facecam') {
+      const facecam = manifest.facecam || null;
+      if (!facecam) {
+        response.status(404).json({ error: 'Facecam clip not found in reel' });
+        return;
+      }
+      response.json({
+        ok: true,
+        kind: 'facecam',
+        reelName,
+        clipId: 'facecam',
+        status: facecam.transcript_status || 'pending',
+        transcriptPreview: facecam.transcript_preview || '',
+        transcriptError: facecam.transcript_error || null,
+        durationSeconds: facecam.duration_seconds || null,
+        path: facecam.path || null,
+        uploadedAt: facecam.uploaded_at || null,
+      });
+      return;
+    }
+
+    const broll = (manifest.broll || []).find((clip) => clip.clip_id === clipId);
+    if (!broll) {
+      response.status(404).json({ error: `Clip not found: ${clipId}` });
+      return;
+    }
+    response.json({
+      ok: true,
+      kind: 'broll',
+      reelName,
+      clipId: broll.clip_id,
+      status: broll.tagging_status || 'complete',
+      summary: broll.summary || null,
+      tags: broll.tags || [],
+      durationSeconds: broll.duration_seconds || null,
+      path: broll.path || null,
+      metadataPath: broll.metadata_path || null,
+      uploadedAt: broll.uploaded_at || null,
+    });
+  } catch (error) {
+    console.error(error);
+    response.status(500).json({ error: getPublicErrorMessage(error) });
+  }
+});
+
 app.post('/api/clips', upload.single('clip'), async (request, response) => {
   const cleanupPaths = [];
 
@@ -129,18 +286,58 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
   await box.ensureFolder(reelFolder.id, 'broll');
 
   const uploadedVideo = await box.uploadFileOrVersion(facecamFolder.id, 'facecam.mp4', file.path, file.mimetype);
-  const transcriptTextFile = await box.uploadTextIfMissing(
+
+  const transcribeWorkDir = path.join(WORK_DIR, `transcribe-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  let transcriptResult = null;
+  let transcriptError = null;
+
+  try {
+    console.log(`[facecam] transcribing ${path.basename(file.path)} (${durationSeconds}s)`);
+    transcriptResult = await transcribeVideo({ videoPath: file.path, workDir: transcribeWorkDir });
+    console.log(`[facecam] transcribed in ${transcriptResult.elapsedMs}ms (${transcriptResult.text.length} chars)`);
+  } catch (error) {
+    transcriptError = error;
+    console.error(`[facecam] transcription failed: ${getPublicErrorMessage(error)}`);
+  } finally {
+    await fs.rm(transcribeWorkDir, { recursive: true, force: true }).catch(() => {});
+  }
+
+  const transcriptText = transcriptResult?.text || '';
+  const transcriptJson = transcriptResult
+    ? {
+        status: 'complete',
+        text: transcriptResult.text,
+        segments: transcriptResult.segments,
+        words: transcriptResult.words,
+        language: transcriptResult.language,
+        duration: transcriptResult.duration,
+        model: transcriptResult.model,
+        created_at: createdAt,
+        transcribed_at: new Date().toISOString(),
+      }
+    : {
+        status: 'failed',
+        text: '',
+        segments: [],
+        words: [],
+        error: transcriptError ? getPublicErrorMessage(transcriptError) : 'Unknown transcription error',
+        created_at: createdAt,
+        transcribed_at: new Date().toISOString(),
+      };
+
+  const transcriptTextFile = await box.uploadTextOrVersion(
     facecamFolder.id,
     'transcript.txt',
-    'Transcript pending.\n',
+    transcriptText ? `${transcriptText}\n` : 'Transcript unavailable.\n',
     'text/plain'
   );
-  const transcriptJsonFile = await box.uploadJsonIfMissing(facecamFolder.id, 'transcript.json', {
-    status: 'pending',
-    text: '',
-    segments: [],
-    created_at: createdAt,
-  });
+  const transcriptJsonFile = await box.uploadJsonOrVersion(
+    facecamFolder.id,
+    'transcript.json',
+    transcriptJson
+  );
+
+  const transcriptStatus = transcriptJson.status;
 
   const manifest = await box.upsertManifest(reelFolder.id, (currentManifest) => ({
     ...baseManifest(currentManifest, reelFolder.name),
@@ -151,6 +348,9 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
       duration_seconds: durationSeconds,
       transcript_text_file_id: transcriptTextFile.id,
       transcript_json_file_id: transcriptJsonFile.id,
+      transcript_status: transcriptStatus,
+      transcript_preview: transcriptText.slice(0, 280),
+      transcript_error: transcriptStatus === 'failed' ? transcriptJson.error : null,
       uploaded_at: new Date().toISOString(),
     },
   }));
@@ -164,6 +364,9 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
     boxPath: `/reels/${reelFolder.name}/facecam/facecam.mp4`,
     uploadedFile: miniItem(uploadedVideo),
     manifestFile: miniItem(manifest),
+    transcriptStatus,
+    transcriptPreview: transcriptText.slice(0, 280),
+    transcriptError: transcriptStatus === 'failed' ? transcriptJson.error : null,
   };
 }
 
@@ -214,6 +417,7 @@ async function saveBrollClip({ file, durationSeconds, createdAt, cleanupPaths, r
       metadata_file_id: metadataFile.id,
       path: `/reels/${reelFolder.name}/broll/${clipFolder.name}/clip.mp4`,
       metadata_path: `/reels/${reelFolder.name}/broll/${clipFolder.name}/metadata.json`,
+      tagging_status: metadata.tagging_status || 'complete',
       summary: metadata.summary,
       tags: [
         ...metadata.setting,
@@ -479,6 +683,13 @@ async function createBoxClient() {
     return JSON.parse(text);
   }
 
+  async function downloadFile(fileId, destPath) {
+    const response = await boxFetch(`${BOX_API_BASE}/files/${fileId}/content`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.writeFile(destPath, buffer);
+    return { path: destPath, bytes: buffer.length };
+  }
+
   async function upsertManifest(reelFolderId, updater) {
     const existingManifestFile = await findChild(reelFolderId, 'reel_manifest.json', 'file');
     const existingManifest = existingManifestFile
@@ -489,9 +700,28 @@ async function createBoxClient() {
     return uploadJsonOrVersion(reelFolderId, 'reel_manifest.json', nextManifest);
   }
 
+  async function downloadManifest(reelFolderId) {
+    const existingManifestFile = await findChild(reelFolderId, 'reel_manifest.json', 'file');
+    if (!existingManifestFile) return null;
+    return downloadJsonFile(existingManifestFile.id).catch(() => null);
+  }
+
+  async function uploadTextOrVersion(folderId, name, text, mimeType = 'text/plain') {
+    const existingFile = await findChild(folderId, name, 'file');
+    const bytes = Buffer.from(text);
+
+    if (existingFile) {
+      return uploadBufferVersion(existingFile.id, name, bytes, mimeType);
+    }
+
+    return uploadBuffer(folderId, name, bytes, mimeType);
+  }
+
   return {
     createNextClipFolder,
     createNextReelFolder,
+    downloadFile,
+    downloadManifest,
     ensureFolder,
     getLatestOrCreateReelFolder,
     getReelFolderByName,
@@ -502,6 +732,7 @@ async function createBoxClient() {
     uploadJsonIfMissing,
     uploadJsonOrVersion,
     uploadTextIfMissing,
+    uploadTextOrVersion,
     upsertManifest,
   };
 }

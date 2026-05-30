@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "1.0",
+  "output": {
+    "aspectRatio": "9:16",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationSec": 10
+  },
+  "assets": [
+    {
+      "id": "facecam-1",
+      "kind": "talking_head",
+      "uri": "/fake/facecam.mp4",
+      "boxFileId": "box_facecam_1",
+      "boxPath": "/reels/reel_001/facecam/facecam.mp4",
+      "durationSec": 10
+    },
+    {
+      "id": "broll-1",
+      "kind": "broll",
+      "uri": "/fake/broll1.mp4",
+      "boxFileId": "box_broll_1",
+      "boxPath": "/reels/reel_001/broll/clip_001/clip.mp4",
+      "durationSec": 4
+    },
+    {
+      "id": "broll-2",
+      "kind": "broll",
+      "uri": "/fake/broll2.mp4",
+      "boxFileId": "box_broll_2",
+      "boxPath": "/reels/reel_001/broll/clip_002/clip.mp4",
+      "durationSec": 3
+    }
+  ],
+  "styles": {
+    "captions": [
+      {
+        "id": "primary",
+        "fontFamily": "Inter",
+        "fontSizePx": 72,
+        "fontWeight": "bold",
+        "color": "#FFFFFF",
+        "highlightColor": "#F7D94C",
+        "backgroundColor": "#000000",
+        "strokeColor": "#000000",
+        "strokeWidthPx": 4,
+        "x": 60,
+        "y": 1600,
+        "maxWidthPx": 960,
+        "align": "center",
+        "case": "upper",
+        "animation": "karaoke"
+      }
+    ]
+  },
+  "tracks": {
+    "video": [
+      {
+        "id": "video-main",
+        "role": "main",
+        "zIndex": 0,
+        "items": [
+          {
+            "id": "v-main-1",
+            "assetId": "facecam-1",
+            "sourceInSec": 0,
+            "sourceOutSec": 10,
+            "timelineInSec": 0,
+            "timelineOutSec": 10,
+            "playbackRate": 1,
+            "opacity": 1,
+            "audio": "keep",
+            "layout": {
+              "mode": "cover",
+              "x": 0,
+              "y": 0,
+              "width": 1080,
+              "height": 1920,
+              "crop": null
+            }
+          }
+        ]
+      },
+      {
+        "id": "video-overlay",
+        "role": "overlay",
+        "zIndex": 1,
+        "items": [
+          {
+            "id": "v-overlay-1",
+            "assetId": "broll-1",
+            "sourceInSec": 0,
+            "sourceOutSec": 3,
+            "timelineInSec": 2,
+            "timelineOutSec": 5,
+            "playbackRate": 1,
+            "opacity": 1,
+            "audio": "mute",
+            "layout": {
+              "mode": "cover",
+              "x": 0,
+              "y": 0,
+              "width": 1080,
+              "height": 1920,
+              "crop": null
+            }
+          },
+          {
+            "id": "v-overlay-2",
+            "assetId": "broll-2",
+            "sourceInSec": 0,
+            "sourceOutSec": 2,
+            "timelineInSec": 6,
+            "timelineOutSec": 8,
+            "playbackRate": 1,
+            "opacity": 1,
+            "audio": "mute",
+            "layout": {
+              "mode": "cover",
+              "x": 0,
+              "y": 0,
+              "width": 1080,
+              "height": 1920,
+              "crop": null
+            }
+          }
+        ]
+      }
+    ],
+    "audio": [],
+    "captions": [
+      {
+        "id": "captions-main",
+        "role": "captions",
+        "zIndex": 10,
+        "items": [
+          {
+            "id": "cap-1",
+            "timelineInSec": 0.5,
+            "timelineOutSec": 3,
+            "text": "hello world",
+            "tokens": [
+              { "text": "hello", "timelineInSec": 0.5, "timelineOutSec": 1.5, "highlight": false },
+              { "text": " world", "timelineInSec": 1.5, "timelineOutSec": 3, "highlight": true }
+            ],
+            "styleId": "primary"
+          }
+        ]
+      }
+    ]
+  }
+}
