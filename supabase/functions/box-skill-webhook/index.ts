@@ -69,21 +69,33 @@ Deno.serve(async (req) => {
     const vector = await embed(transcript || dp.topic || "untitled clip");
 
     // 4. Write skill cards back to Box (shows in the Box preview sidebar).
+    //    Non-fatal: a Box-side write failure must not stop the clip from
+    //    reaching 'analyzed' in the DB (the core pipeline result).
     if (writeToken && skillId) {
-      await writeSkillCards(writeToken, skillId, invocationId, {
-        transcript: transcript || "(no speech detected)",
-        keywords: dp.keywords ?? [],
-      });
+      try {
+        await writeSkillCards(writeToken, skillId, invocationId, {
+          transcript: transcript || "(no speech detected)",
+          keywords: dp.keywords ?? [],
+        });
+      } catch (e) {
+        console.warn("writeSkillCards failed (non-fatal):", String(e));
+      }
     }
 
     // 5. Write the richer datapoint to the metadata template (app token).
-    const appToken = await getAppToken();
-    await writeDatapoint(appToken, fileId, {
-      topic: dp.topic ?? "",
-      sentiment: dp.sentiment ?? "neutral",
-      hook_candidate: !!dp.hook_candidate,
-      broll_candidate: !!dp.broll_candidate,
-    });
+    //    Non-fatal for the same reason (also needs the reelify_datapoint
+    //    template + CCG enterprise access to exist).
+    try {
+      const appToken = await getAppToken();
+      await writeDatapoint(appToken, fileId, {
+        topic: dp.topic ?? "",
+        sentiment: dp.sentiment ?? "neutral",
+        hook_candidate: !!dp.hook_candidate,
+        broll_candidate: !!dp.broll_candidate,
+      });
+    } catch (e) {
+      console.warn("writeDatapoint failed (non-fatal):", String(e));
+    }
 
     // 6. Upsert into Supabase (status -> analyzed) + store the embedding.
     const { data: clip } = await sb
