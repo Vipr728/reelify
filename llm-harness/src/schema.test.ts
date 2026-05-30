@@ -48,6 +48,22 @@ test("rejects plan assets that do not match the input context", () => {
   assert.throws(() => assertPlanCompatibleWithContext(plan, validContext));
 });
 
+test("rejects plans that extend past the talking-head duration", () => {
+  const plan = EditPlanSchema.parse(clone(validPlan));
+  const context = EditContextSchema.parse(clone(validContext));
+  const talkingHead = context.assets.find((asset) => asset.kind === "talking_head");
+  assert.ok(talkingHead);
+
+  talkingHead.durationSec = 7.3;
+  plan.assets[0].durationSec = 7.3;
+  plan.output.durationSec = 8;
+
+  assert.throws(
+    () => assertPlanCompatibleWithContext(plan, context),
+    /talking_head durationSec/,
+  );
+});
+
 test("accepts Apify recipe JSON as harness recipe input", () => {
   const recipe = parseRecipeInput({
     target_duration_s: 24,
