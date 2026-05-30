@@ -24,3 +24,6 @@ app/android/
 # misc
 .DS_Store
 *.log
+
+# supabase CLI temp
+supabase/.temp/
