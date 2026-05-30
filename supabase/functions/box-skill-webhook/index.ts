@@ -41,16 +41,24 @@ Deno.serve(async (req) => {
 
     const payload = JSON.parse(rawBody);
 
-    // Shape per Box Skills payload docs.
-    const fileId: string = payload.source?.id;
+    // Two payload shapes are supported:
+    //  - Box Skills payload: { source.id, skill.id, id, token.read, token.write }
+    //  - App-triggered:      { fileId } — the app POSTs this directly after upload
+    //                        when no Box-side Skill/webhook is available. We use a
+    //                        CCG app token to download and skip writeSkillCards
+    //                        (no skill context in this mode).
+    const fileId: string = payload.source?.id ?? payload.fileId;
     const skillId: string = payload.skill?.id;
     const invocationId: string = payload.id;
     const readToken: string = payload.token?.read?.access_token;
     const writeToken: string = payload.token?.write?.access_token;
-    if (!fileId || !readToken) return new Response("bad payload", { status: 400 });
+    if (!fileId) return new Response("bad payload: missing fileId", { status: 400 });
 
-    // 1. Download the clip from Box and transcribe it (text + duration seconds).
-    const bytes = await downloadFile(readToken, fileId);
+    // 1. Download the clip from Box and transcribe it.
+    //    Skills mode: use the per-event read token.
+    //    App-triggered mode: fall back to a CCG app token.
+    const downloadToken = readToken || (await getAppToken());
+    const bytes = await downloadFile(downloadToken, fileId);
     const { text: transcript, duration } = await transcribe(bytes);
 
     // Surface progress early: flip an existing row (the app's optimistic

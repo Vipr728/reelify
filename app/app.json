@@ -13,7 +13,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Reelify uses the camera to record short vertical clips.",
         "NSMicrophoneUsageDescription": "Reelify records audio with your clips for transcription.",
-        "NSPhotoLibraryAddUsageDescription": "Reelify can save rendered reels to your camera roll."
+        "NSPhotoLibraryAddUsageDescription": "Reelify can save rendered reels to your camera roll.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -29,8 +30,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-dev-client",
+      "expo-camera",
       "expo-video"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "e9672632-8c05-4352-b121-c57ef25376b6"
+      }
+    },
+    "owner": "aarnavbhat"
   }
 }

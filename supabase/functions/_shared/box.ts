@@ -102,7 +102,7 @@ export async function writeSkillCards(
 // Create the `reelify_datapoint` template in the Box dev console first.
 export async function writeDatapoint(appToken: string, fileId: string, data: Record<string, unknown>) {
   const res = await fetch(
-    `${BOX_API}/files/${fileId}/metadata/enterprise/reelify_datapoint`,
+    `${BOX_API}/files/${fileId}/metadata/enterprise/reelifyDatapoint`,
     {
       method: "POST",
       headers: { authorization: `Bearer ${appToken}`, "content-type": "application/json" },

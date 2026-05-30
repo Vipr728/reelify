@@ -1,8 +1,8 @@
 // Snapchat-style vertical clip recorder.
-// Records short (<=15s) vertical clips with react-native-vision-camera v5
-// (Nitro rewrite). Each finished clip uploads to Box immediately and shows a
-// per-clip upload chip. The 15s cap is enforced natively via Recorder
-// maxDuration; a JS timer drives the on-screen countdown only.
+// Records short (<=15s) vertical clips using expo-camera (Expo Go-compatible).
+// Each finished clip uploads to Box immediately and shows a per-clip upload
+// chip. The 15s cap is enforced natively via recordAsync's maxDuration; a JS
+// timer drives the on-screen countdown only.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,14 +14,10 @@ import {
   View,
 } from 'react-native';
 import {
-  Camera,
-  CommonResolutions,
-  useCameraDevice,
-  useCameraPermission,
-  useMicrophonePermission,
-  useVideoOutput,
-} from 'react-native-vision-camera';
-import type { Recorder, RecorderFileType } from 'react-native-vision-camera';
+  CameraView,
+  useCameraPermissions,
+  useMicrophonePermissions,
+} from 'expo-camera';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -29,7 +25,6 @@ import { uploadClip } from '../lib/upload';
 import { colors, spacing, radius } from '../lib/theme';
 import { MAX_CLIP_DURATION_S } from '../lib/config';
 
-// A single in-flight / completed upload, surfaced as a chip at the top.
 type UploadStatus = 'uploading' | 'done' | 'failed';
 interface PendingUpload {
   id: number;
@@ -37,10 +32,6 @@ interface PendingUpload {
   status: UploadStatus;
   error?: string;
 }
-
-// vision-camera returns a bare filesystem path. fileType 'mp4' is iOS-valid;
-// the worker normalizes to 1080x1920 later, output orientation handles portrait.
-const FILE_TYPE: RecorderFileType = 'mp4';
 
 function formatTime(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds));
@@ -53,16 +44,9 @@ export default function RecordScreen() {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
 
-  const device = useCameraDevice('back');
-  const camera = useCameraPermission();
-  const mic = useMicrophonePermission();
-  const videoOutput = useVideoOutput({
-    targetResolution: CommonResolutions.FHD_16_9,
-    enableAudio: true,
-    fileType: FILE_TYPE,
-  });
+  const [cameraPerm, requestCameraPerm] = useCameraPermissions();
+  const [micPerm, requestMicPerm] = useMicrophonePermissions();
 
-  // Camera session must run only when focused AND foregrounded.
   const [appActive, setAppActive] = useState<boolean>(
     AppState.currentState === 'active',
   );
@@ -70,17 +54,13 @@ export default function RecordScreen() {
   const [elapsed, setElapsed] = useState(0);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
 
-  // The single-use Recorder for the in-flight clip (one Recorder per clip).
-  const recorderRef = useRef<Recorder | null>(null);
-  // Drives the on-screen countdown; native maxDuration owns the hard stop.
+  const cameraRef = useRef<CameraView | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Stable incrementing id for upload chips (never Date.now() in render).
   const nextIdRef = useRef(0);
 
-  const hasPermission = camera.hasPermission && mic.hasPermission;
+  const hasPermission = !!cameraPerm?.granted && !!micPerm?.granted;
   const isActive = isFocused && appActive && hasPermission;
 
-  // Track app foreground/background so the camera session pauses in background.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
       setAppActive(next === 'active');
@@ -88,13 +68,15 @@ export default function RecordScreen() {
     return () => sub.remove();
   }, []);
 
-  // Request camera + mic up front if not already granted.
   useEffect(() => {
-    if (!camera.hasPermission) void camera.requestPermission();
-    if (!mic.hasPermission) void mic.requestPermission();
-    // Only run on mount-ish; permission objects are stable per status.
+    if (cameraPerm && !cameraPerm.granted && cameraPerm.canAskAgain) {
+      void requestCameraPerm();
+    }
+    if (micPerm && !micPerm.granted && micPerm.canAskAgain) {
+      void requestMicPerm();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [cameraPerm?.granted, micPerm?.granted]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current != null) {
@@ -105,7 +87,6 @@ export default function RecordScreen() {
 
   useEffect(() => clearTimer, [clearTimer]);
 
-  // Kick off the upload for a finished clip and track its status as a chip.
   const startUpload = useCallback(async (id: number, uri: string) => {
     try {
       await uploadClip(uri);
@@ -122,29 +103,11 @@ export default function RecordScreen() {
     }
   }, []);
 
-  // Called from the recorder's onRecordingFinished. uri is a bare fs path.
-  const handleFinished = useCallback(
-    (uri: string) => {
-      clearTimer();
-      setIsRecording(false);
-      setElapsed(0);
-      recorderRef.current = null;
-
-      const id = nextIdRef.current++;
-      setUploads((prev) => [...prev, { id, uri, status: 'uploading' }]);
-      void startUpload(id, uri);
-    },
-    [clearTimer, startUpload],
-  );
-
-  // Reset recording UI if the recorder errors out mid-clip.
   const handleRecordingError = useCallback(
     (error: Error) => {
       clearTimer();
       setIsRecording(false);
       setElapsed(0);
-      recorderRef.current = null;
-      // Surface the failure as a chip so the user isn't left guessing.
       const id = nextIdRef.current++;
       setUploads((prev) => [
         ...prev,
@@ -155,43 +118,44 @@ export default function RecordScreen() {
   );
 
   const startRecording = useCallback(async () => {
-    if (isRecording || recorderRef.current != null) return;
+    const cam = cameraRef.current;
+    if (isRecording || cam == null) return;
+
+    setIsRecording(true);
+    setElapsed(0);
+    clearTimer();
+    timerRef.current = setInterval(() => {
+      setElapsed((e) => Math.min(e + 1, MAX_CLIP_DURATION_S));
+    }, 1000);
+
     try {
-      // A Recorder records exactly once: create a fresh one per clip.
-      const recorder = await videoOutput.createRecorder({
+      // recordAsync resolves with { uri } when stopRecording() is called or
+      // maxDuration elapses. iOS produces a .mov file at a tmp path.
+      const result = await cam.recordAsync({
         maxDuration: MAX_CLIP_DURATION_S,
       });
-      recorderRef.current = recorder;
-
-      setIsRecording(true);
-      setElapsed(0);
       clearTimer();
-      timerRef.current = setInterval(() => {
-        setElapsed((e) => Math.min(e + 1, MAX_CLIP_DURATION_S));
-      }, 1000);
-
-      await recorder.startRecording(
-        (filePath: string) => handleFinished(filePath),
-        (error: Error) => handleRecordingError(error),
-      );
+      setIsRecording(false);
+      setElapsed(0);
+      if (result?.uri) {
+        const id = nextIdRef.current++;
+        setUploads((prev) => [
+          ...prev,
+          { id, uri: result.uri, status: 'uploading' },
+        ]);
+        void startUpload(id, result.uri);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Recording failed';
       handleRecordingError(new Error(message));
     }
-  }, [
-    isRecording,
-    videoOutput,
-    clearTimer,
-    handleFinished,
-    handleRecordingError,
-  ]);
+  }, [isRecording, clearTimer, startUpload, handleRecordingError]);
 
-  const stopRecording = useCallback(async () => {
-    const recorder = recorderRef.current;
-    if (recorder == null) return;
+  const stopRecording = useCallback(() => {
+    const cam = cameraRef.current;
+    if (cam == null) return;
     try {
-      // onRecordingFinished fires after this (reason 'stopped').
-      await recorder.stopRecording();
+      cam.stopRecording();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Stop failed';
       handleRecordingError(new Error(message));
@@ -199,11 +163,10 @@ export default function RecordScreen() {
   }, [handleRecordingError]);
 
   const onPressRecordButton = useCallback(() => {
-    if (isRecording) void stopRecording();
+    if (isRecording) stopRecording();
     else void startRecording();
   }, [isRecording, startRecording, stopRecording]);
 
-  // Tapping a failed chip retries its upload (if it has a usable uri).
   const onRetry = useCallback(
     (item: PendingUpload) => {
       if (item.status !== 'failed' || item.uri.length === 0) return;
@@ -224,7 +187,8 @@ export default function RecordScreen() {
 
   // --- Permission gate ----------------------------------------------------
   if (!hasPermission) {
-    const canAsk = camera.canRequestPermission || mic.canRequestPermission;
+    const canAsk =
+      (cameraPerm?.canAskAgain ?? true) || (micPerm?.canAskAgain ?? true);
     return (
       <View style={styles.gate}>
         <Text style={styles.gateTitle}>Camera & microphone needed</Text>
@@ -235,8 +199,8 @@ export default function RecordScreen() {
         <Pressable
           style={styles.gateButton}
           onPress={() => {
-            if (!camera.hasPermission) void camera.requestPermission();
-            if (!mic.hasPermission) void mic.requestPermission();
+            void requestCameraPerm();
+            void requestMicPerm();
           }}
         >
           <Text style={styles.gateButtonText}>
@@ -247,27 +211,19 @@ export default function RecordScreen() {
     );
   }
 
-  // --- No camera fallback -------------------------------------------------
-  if (device == null) {
-    return (
-      <View style={styles.gate}>
-        <Text style={styles.gateTitle}>No camera available</Text>
-        <Text style={styles.gateBody}>
-          This device has no usable back camera.
-        </Text>
-      </View>
-    );
-  }
-
   // --- Recorder UI --------------------------------------------------------
   return (
     <View style={styles.root}>
-      <Camera
-        style={StyleSheet.absoluteFill}
-        device={device}
-        outputs={[videoOutput]}
-        isActive={isActive}
-      />
+      {isActive ? (
+        <CameraView
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          mode="video"
+          facing="back"
+          mute={false}
+          videoQuality="1080p"
+        />
+      ) : null}
 
       {/* Upload chips, top overlay. */}
       <View style={[styles.chipStrip, { top: insets.top + spacing.sm }]}>
@@ -341,7 +297,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  // Permission / fallback gate.
   gate: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -374,7 +329,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
-  // Upload chips.
   chipStrip: {
     position: 'absolute',
     left: spacing.md,
@@ -398,7 +352,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  // Timer + progress.
   timerWrap: {
     position: 'absolute',
     left: spacing.md,
@@ -427,7 +380,6 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: colors.accent,
   },
-  // Record button.
   controls: {
     position: 'absolute',
     left: 0,
