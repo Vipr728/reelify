@@ -17,13 +17,17 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const TMP_ROOT = path.join(__dirname, '.tmp');
 const UPLOAD_DIR = path.join(TMP_ROOT, 'uploads');
 const WORK_DIR = path.join(TMP_ROOT, 'work');
+const PLAN_WORK_DIR = path.join(WORK_DIR, 'plans');
+const APIFY_INTEGRATION_DIR = path.join(PROJECT_ROOT, 'apify-integration');
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const BOX_API_BASE = 'https://api.box.com/2.0';
 const BOX_UPLOAD_BASE = 'https://upload.box.com/api/2.0';
 const OPENAI_MODEL = process.env.OPENAI_BROLL_MODEL || 'gpt-4.1-mini';
+const APIFY_QUANTIFY_CONCURRENCY = Number(process.env.APIFY_QUANTIFY_CONCURRENCY || 3);
 
 fsSync.mkdirSync(UPLOAD_DIR, { recursive: true });
 fsSync.mkdirSync(WORK_DIR, { recursive: true });
+fsSync.mkdirSync(PLAN_WORK_DIR, { recursive: true });
 
 const upload = multer({
   dest: UPLOAD_DIR,
@@ -31,7 +35,6 @@ const upload = multer({
 });
 
 let boxTokenCache = null;
-
 app.use(cors());
 app.use(express.json());
 
@@ -41,6 +44,7 @@ app.get('/health', (_request, response) => {
     boxConfigured: hasBoxConfig(),
     boxAuthMode: process.env.BOX_DEVELOPER_TOKEN ? 'developer_token' : 'client_credentials',
     openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    apifyConfigured: Boolean(process.env.OPENAI_API_KEY && process.env.TAVILY_API_KEY && process.env.APIFY_TOKEN),
     uploadLimitMb: MAX_UPLOAD_BYTES / 1024 / 1024,
   });
 });
@@ -100,10 +104,12 @@ app.post('/api/clips', upload.single('clip'), async (request, response) => {
       ? new Date(Number(request.body.createdAt)).toISOString()
       : new Date().toISOString();
     const reelName = normalizeOptionalReelName(request.body.reelName);
+    const transcriptText = normalizeOptionalText(request.body.transcriptText);
+    const transcriptJson = parseOptionalJson(request.body.transcriptJson);
 
     const result =
       clipType === 'talking'
-        ? await saveFacecamClip({ file: request.file, durationSeconds, createdAt, reelName })
+        ? await saveFacecamClip({ file: request.file, durationSeconds, createdAt, reelName, transcriptText, transcriptJson })
         : await saveBrollClip({ file: request.file, durationSeconds, createdAt, cleanupPaths, reelName });
 
     response.json(result);
@@ -115,11 +121,26 @@ app.post('/api/clips', upload.single('clip'), async (request, response) => {
   }
 });
 
+app.post('/api/reels/:reelName/edit-plan', async (request, response) => {
+  try {
+    const reelName = normalizeRequiredReelName(request.params.reelName);
+    const result = await generateReelEditPlan({ reelName });
+
+    response.json({
+      ok: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error(error);
+    response.status(500).json({ error: getPublicErrorMessage(error) });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Reelify upload server listening on http://localhost:${PORT}`);
 });
 
-async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
+async function saveFacecamClip({ file, durationSeconds, createdAt, reelName, transcriptText, transcriptJson }) {
   const box = await createBoxClient();
   const reelsFolder = await box.getReelsFolder();
   const reelFolder = reelName
@@ -129,18 +150,17 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
   await box.ensureFolder(reelFolder.id, 'broll');
 
   const uploadedVideo = await box.uploadFileOrVersion(facecamFolder.id, 'facecam.mp4', file.path, file.mimetype);
-  const transcriptTextFile = await box.uploadTextIfMissing(
+  const transcript = transcriptText
+    ? transcriptFromRequest({ transcriptText, transcriptJson, createdAt, durationSeconds })
+    : await transcribeFacecamVideo({ filePath: file.path, createdAt, durationSeconds });
+
+  const transcriptTextFile = await box.uploadTextOrVersion(
     facecamFolder.id,
     'transcript.txt',
-    'Transcript pending.\n',
+    `${transcript.text || 'Transcript unavailable.'}\n`,
     'text/plain'
   );
-  const transcriptJsonFile = await box.uploadJsonIfMissing(facecamFolder.id, 'transcript.json', {
-    status: 'pending',
-    text: '',
-    segments: [],
-    created_at: createdAt,
-  });
+  const transcriptJsonFile = await box.uploadJsonOrVersion(facecamFolder.id, 'transcript.json', transcript.json);
 
   const manifest = await box.upsertManifest(reelFolder.id, (currentManifest) => ({
     ...baseManifest(currentManifest, reelFolder.name),
@@ -151,6 +171,7 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
       duration_seconds: durationSeconds,
       transcript_text_file_id: transcriptTextFile.id,
       transcript_json_file_id: transcriptJsonFile.id,
+      transcript_status: transcript.json.status,
       uploaded_at: new Date().toISOString(),
     },
   }));
@@ -163,7 +184,120 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
     reel,
     boxPath: `/reels/${reelFolder.name}/facecam/facecam.mp4`,
     uploadedFile: miniItem(uploadedVideo),
+    transcriptTextFile: miniItem(transcriptTextFile),
+    transcriptJsonFile: miniItem(transcriptJsonFile),
+    transcriptStatus: transcript.json.status,
     manifestFile: miniItem(manifest),
+  };
+}
+
+function transcriptFromRequest({ transcriptText, transcriptJson, createdAt, durationSeconds }) {
+  const text = transcriptText.trim();
+  const json = {
+    status: 'complete',
+    source: 'client-provided',
+    text,
+    segments: [],
+    words: [],
+    created_at: createdAt,
+    duration_seconds: durationSeconds,
+    ...(transcriptJson && typeof transcriptJson === 'object' ? transcriptJson : {}),
+  };
+
+  return { text, json };
+}
+
+async function transcribeFacecamVideo({ filePath, createdAt, durationSeconds }) {
+  if (!process.env.OPENAI_API_KEY) {
+    return pendingTranscript({
+      status: 'pending',
+      reason: 'OPENAI_API_KEY is missing.',
+      createdAt,
+      durationSeconds,
+    });
+  }
+
+  const audioPath = path.join(WORK_DIR, `facecam-audio-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
+
+  try {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i',
+      filePath,
+      '-vn',
+      '-ac',
+      '1',
+      '-ar',
+      '16000',
+      '-c:a',
+      'libmp3lame',
+      '-q:a',
+      '9',
+      audioPath,
+    ]);
+
+    const audioBytes = await fs.readFile(audioPath);
+    const formData = new FormData();
+    formData.append('file', new Blob([audioBytes], { type: 'audio/mpeg' }), 'facecam-audio.mp3');
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', 'verbose_json');
+    formData.append('timestamp_granularities[]', 'segment');
+    formData.append('timestamp_granularities[]', 'word');
+
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: formData,
+    });
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(payload?.error?.message || `OpenAI transcription failed: ${response.status}`);
+    }
+
+    const text = String(payload?.text || '').trim();
+    return {
+      text,
+      json: {
+        status: text ? 'complete' : 'empty',
+        source: 'openai-whisper',
+        model: 'whisper-1',
+        text,
+        language: payload?.language || null,
+        duration_seconds: durationSeconds,
+        created_at: createdAt,
+        transcribed_at: new Date().toISOString(),
+        segments: Array.isArray(payload?.segments) ? payload.segments : [],
+        words: Array.isArray(payload?.words) ? payload.words : [],
+      },
+    };
+  } catch (error) {
+    return pendingTranscript({
+      status: 'error',
+      reason: getPublicErrorMessage(error),
+      createdAt,
+      durationSeconds,
+    });
+  } finally {
+    await fs.rm(audioPath, { force: true }).catch(() => {});
+  }
+}
+
+function pendingTranscript({ status, reason, createdAt, durationSeconds }) {
+  return {
+    text: '',
+    json: {
+      status,
+      reason,
+      source: 'server',
+      text: '',
+      segments: [],
+      words: [],
+      created_at: createdAt,
+      duration_seconds: durationSeconds,
+    },
   };
 }
 
@@ -248,6 +382,261 @@ async function saveBrollClip({ file, durationSeconds, createdAt, cleanupPaths, r
     manifestFile: miniItem(manifest),
     metadata,
   };
+}
+
+async function generateReelEditPlan({ reelName }) {
+  assertPipelineConfig();
+
+  const box = await createBoxClient();
+  const reelsFolder = await box.getReelsFolder();
+  const reelFolder = await box.getReelFolderByName(reelsFolder.id, reelName);
+  const transcriptText = await readFacecamTranscriptText(box, reelFolder);
+  const runId = `${reelName}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  const runDir = path.join(PLAN_WORK_DIR, runId);
+  await fs.mkdir(runDir, { recursive: true });
+
+  const transcriptPath = path.join(runDir, `script.${reelName}.txt`);
+  await fs.writeFile(transcriptPath, transcriptText, 'utf8');
+
+  const apifyInput = {
+    kind: 'script',
+    text: transcriptText,
+    scriptFile: transcriptPath,
+    options: {
+      quantifyConcurrency: Number.isFinite(APIFY_QUANTIFY_CONCURRENCY) ? APIFY_QUANTIFY_CONCURRENCY : 3,
+    },
+  };
+  await debugLogPayload(runDir, '01-apify-input', apifyInput);
+
+  const apifyReport = await runApifyPipelineForTranscript(transcriptPath);
+  await debugLogPayload(runDir, '02-apify-output-report', apifyReport);
+  if (!apifyReport?.recipe) {
+    throw new Error('Apify pipeline did not produce a recipe. Check creator scrape and quantify results.');
+  }
+  await debugLogPayload(runDir, '03-apify-output-recipe', apifyReport.recipe);
+
+  const apifyReportPath = path.join(runDir, `apify-report.${reelName}.json`);
+  const apifyRecipePath = path.join(runDir, `apify-recipe.${reelName}.json`);
+  const contextPath = path.join(runDir, `context.${reelName}.json`);
+  const editPlanPath = path.join(runDir, `edit-plan.${reelName}.json`);
+
+  await writeJsonFile(apifyReportPath, apifyReport);
+  await writeJsonFile(apifyRecipePath, apifyReport.recipe);
+
+  const outputFolders = await ensureReelOutputFolders(box, reelFolder.id);
+  const apifyReportFile = await box.uploadFileOrVersion(
+    outputFolders.apify.id,
+    `apify-report.${reelName}.json`,
+    apifyReportPath,
+    'application/json'
+  );
+  const apifyRecipeFile = await box.uploadFileOrVersion(
+    outputFolders.apify.id,
+    `apify-recipe.${reelName}.json`,
+    apifyRecipePath,
+    'application/json'
+  );
+
+  await runLocalCommand('npm', [
+    'run',
+    'llm:context:box',
+    '--',
+    '--reel',
+    reelName,
+    '--recipe',
+    apifyRecipePath,
+    '--output',
+    contextPath,
+  ], { cwd: PROJECT_ROOT });
+
+  const contextJson = JSON.parse(await fs.readFile(contextPath, 'utf8'));
+  await debugLogPayload(runDir, '04-llm-harness-input-context', {
+    command: 'npm run llm:context:box',
+    recipeFile: apifyRecipePath,
+    context: contextJson,
+  });
+
+  const contextFile = await box.uploadFileOrVersion(
+    outputFolders.llm.id,
+    `context.${reelName}.json`,
+    contextPath,
+    'application/json'
+  );
+
+  await runLocalCommand('npm', [
+    'run',
+    'llm:plan',
+    '--',
+    '--input',
+    contextPath,
+    '--output',
+    editPlanPath,
+    '--no-box-upload',
+  ], { cwd: PROJECT_ROOT });
+
+  const editPlan = JSON.parse(await fs.readFile(editPlanPath, 'utf8'));
+  await debugLogPayload(runDir, '05-llm-harness-output-edit-plan', {
+    command: 'npm run llm:plan',
+    inputFile: contextPath,
+    outputFile: editPlanPath,
+    editPlan,
+  });
+  const editPlanFile = await box.uploadFileOrVersion(
+    outputFolders.editingInstructions.id,
+    `edit-plan.${reelName}.json`,
+    editPlanPath,
+    'application/json'
+  );
+
+  const manifestFile = await box.upsertManifest(reelFolder.id, (currentManifest) => {
+    const nextManifest = baseManifest(currentManifest, reelFolder.name);
+    return {
+      ...nextManifest,
+      outputs: {
+        ...(nextManifest.outputs || {}),
+        latest_edit_plan: {
+          status: 'complete',
+          generated_at: new Date().toISOString(),
+          apify_report_file_id: apifyReportFile.id,
+          apify_recipe_file_id: apifyRecipeFile.id,
+          llm_context_file_id: contextFile.id,
+          edit_plan_file_id: editPlanFile.id,
+          edit_plan_path: `/reels/${reelFolder.name}/outputs/editing instructions/edit-plan.${reelName}.json`,
+        },
+      },
+    };
+  });
+  const reel = await box.getReelSummary(reelFolder);
+
+  return {
+    reelName,
+    reel,
+    transcriptChars: transcriptText.length,
+    apify: {
+      niche: apifyReport.niche,
+      creators: apifyReport.creators?.length || 0,
+      posts: apifyReport.posts?.length || 0,
+      analyzedVideos: (apifyReport.per_creator || []).reduce((total, creator) => total + (creator.videos_analyzed || 0), 0),
+    },
+    files: {
+      apifyReport: miniItem(apifyReportFile),
+      apifyRecipe: miniItem(apifyRecipeFile),
+      context: miniItem(contextFile),
+      editPlan: miniItem(editPlanFile),
+      manifest: miniItem(manifestFile),
+    },
+    debugDir: runDir,
+    editPlan: summarizeEditPlan(editPlan),
+  };
+}
+
+async function readFacecamTranscriptText(box, reelFolder) {
+  const reelItems = await box.listFolderItems(reelFolder.id);
+  const facecamFolder = reelItems.find((item) => item.type === 'folder' && item.name === 'facecam');
+  if (!facecamFolder) {
+    throw new Error(`Missing facecam folder for ${reelFolder.name}.`);
+  }
+
+  const facecamItems = await box.listFolderItems(facecamFolder.id);
+  const transcriptTextFile = facecamItems.find((item) => item.type === 'file' && item.name === 'transcript.txt');
+  const transcriptJsonFile = facecamItems.find((item) => item.type === 'file' && item.name === 'transcript.json');
+  const transcriptText = transcriptTextFile ? await box.downloadTextFile(transcriptTextFile.id) : '';
+
+  if (isUsableTranscript(transcriptText)) {
+    return transcriptText.trim();
+  }
+
+  const transcriptJson = transcriptJsonFile ? await box.downloadJsonFile(transcriptJsonFile.id).catch(() => null) : null;
+  const jsonText = typeof transcriptJson?.text === 'string' ? transcriptJson.text : '';
+  if (isUsableTranscript(jsonText)) {
+    return jsonText.trim();
+  }
+
+  const status = transcriptJson?.status ? ` status=${transcriptJson.status}` : '';
+  const reason = transcriptJson?.reason ? ` reason=${transcriptJson.reason}` : '';
+  throw new Error(`Facecam transcript is not ready for ${reelFolder.name}.${status}${reason}`);
+}
+
+async function runApifyPipelineForTranscript(transcriptPath) {
+  const concurrency = Number.isFinite(APIFY_QUANTIFY_CONCURRENCY) ? APIFY_QUANTIFY_CONCURRENCY : 3;
+  const { stdout } = await runLocalCommand('npm', [
+    'run',
+    'pipeline:json',
+    '--',
+    '--script-file',
+    transcriptPath,
+    '--concurrency',
+    String(concurrency),
+  ], { cwd: APIFY_INTEGRATION_DIR });
+
+  return JSON.parse(stdout);
+}
+
+async function ensureReelOutputFolders(box, reelFolderId) {
+  const outputs = await box.ensureFolder(reelFolderId, 'outputs');
+  const apify = await box.ensureFolder(outputs.id, 'apify');
+  const llm = await box.ensureFolder(outputs.id, 'llm-harness');
+  const editingInstructions = await box.ensureFolder(outputs.id, 'editing instructions');
+
+  return { outputs, apify, llm, editingInstructions };
+}
+
+async function runLocalCommand(command, args, { cwd }) {
+  console.log(`[reelify:pipeline] running: ${command} ${args.join(' ')} (cwd=${cwd})`);
+  try {
+    const result = await execFileAsync(command, args, {
+      cwd,
+      env: process.env,
+      maxBuffer: 1024 * 1024 * 64,
+    });
+    if (result.stderr) {
+      console.error(`[reelify:pipeline] stderr from ${command} ${args[1] || ''}:\n${result.stderr}`);
+    }
+    if (result.stdout && command !== 'npm') {
+      console.log(`[reelify:pipeline] stdout from ${command}:\n${result.stdout}`);
+    }
+    return result;
+  } catch (error) {
+    const stderr = error?.stderr ? `\n${error.stderr}` : '';
+    const stdout = error?.stdout ? `\n${error.stdout}` : '';
+    throw new Error(`${command} ${args.join(' ')} failed.${stderr}${stdout}`);
+  }
+}
+
+async function writeJsonFile(filePath, data) {
+  await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
+
+async function debugLogPayload(runDir, label, payload) {
+  const filePath = path.join(runDir, `${label}.json`);
+  await writeJsonFile(filePath, payload);
+  console.log(`\n[reelify:pipeline] ${label} saved to ${filePath}`);
+  console.log(`[reelify:pipeline] ${label} BEGIN`);
+  console.log(JSON.stringify(payload, null, 2));
+  console.log(`[reelify:pipeline] ${label} END\n`);
+}
+
+function summarizeEditPlan(editPlan) {
+  const videoItems = editPlan.tracks?.video?.reduce((total, track) => total + (track.items?.length || 0), 0) || 0;
+  const audioItems = editPlan.tracks?.audio?.reduce((total, track) => total + (track.items?.length || 0), 0) || 0;
+  const captionItems = editPlan.tracks?.captions?.reduce((total, track) => total + (track.items?.length || 0), 0) || 0;
+
+  return {
+    durationSec: editPlan.output?.durationSec || 0,
+    assets: editPlan.assets?.length || 0,
+    videoItems,
+    audioItems,
+    captionItems,
+  };
+}
+
+function isUsableTranscript(value) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) {
+    return false;
+  }
+
+  return !/^Transcript (pending|unavailable)\.?$/i.test(text);
 }
 
 async function createBoxClient() {
@@ -420,6 +809,17 @@ async function createBoxClient() {
     return uploadBuffer(folderId, name, Buffer.from(text), mimeType);
   }
 
+  async function uploadTextOrVersion(folderId, name, text, mimeType) {
+    const existingFile = await findChild(folderId, name, 'file');
+    const bytes = Buffer.from(text);
+
+    if (existingFile) {
+      return uploadBufferVersion(existingFile.id, name, bytes, mimeType);
+    }
+
+    return uploadBuffer(folderId, name, bytes, mimeType);
+  }
+
   async function uploadJsonIfMissing(folderId, name, data) {
     const existingFile = await findChild(folderId, name, 'file');
     if (existingFile) {
@@ -479,6 +879,11 @@ async function createBoxClient() {
     return JSON.parse(text);
   }
 
+  async function downloadTextFile(fileId) {
+    const response = await boxFetch(`${BOX_API_BASE}/files/${fileId}/content`);
+    return response.text();
+  }
+
   async function upsertManifest(reelFolderId, updater) {
     const existingManifestFile = await findChild(reelFolderId, 'reel_manifest.json', 'file');
     const existingManifest = existingManifestFile
@@ -492,16 +897,21 @@ async function createBoxClient() {
   return {
     createNextClipFolder,
     createNextReelFolder,
+    downloadJsonFile,
+    downloadTextFile,
     ensureFolder,
+    findChild,
     getLatestOrCreateReelFolder,
     getReelFolderByName,
     getReelSummary,
     getReelsFolder,
+    listFolderItems,
     listReels,
     uploadFileOrVersion,
     uploadJsonIfMissing,
     uploadJsonOrVersion,
     uploadTextIfMissing,
+    uploadTextOrVersion,
     upsertManifest,
   };
 }
@@ -800,6 +1210,7 @@ function baseManifest(currentManifest, reelName) {
     updated_at: new Date().toISOString(),
     facecam: currentManifest?.facecam || null,
     broll: Array.isArray(currentManifest?.broll) ? currentManifest.broll : [],
+    outputs: currentManifest?.outputs || null,
   };
 }
 
@@ -821,6 +1232,42 @@ function normalizeOptionalReelName(value) {
   }
 
   return value;
+}
+
+function normalizeRequiredReelName(value) {
+  if (typeof value !== 'string' || !/^reel_\d+$/.test(value)) {
+    throw new Error('reelName must look like "reel_001".');
+  }
+
+  return value;
+}
+
+function normalizeOptionalText(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.trim();
+}
+
+function parseOptionalJson(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function nextNumericIndex(items, pattern) {
@@ -879,6 +1326,21 @@ function assertBoxConfig() {
 
   if (missing.length > 0) {
     throw new Error(`Missing server env: ${missing.join(', ')}`);
+  }
+}
+
+function assertPipelineConfig() {
+  assertBoxConfig();
+
+  const missing = [];
+  for (const key of ['OPENAI_API_KEY', 'TAVILY_API_KEY', 'APIFY_TOKEN']) {
+    if (!process.env[key]) {
+      missing.push(key);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Missing edit-plan pipeline env: ${missing.join(', ')}`);
   }
 }
 

@@ -17,6 +17,7 @@ import {
 type ClipType = 'talking' | 'broll';
 type CaptureState = 'idle' | 'recording' | 'saving';
 type UploadState = 'idle' | 'uploading' | 'success' | 'error';
+type PlanState = 'idle' | 'running' | 'success' | 'error';
 
 type CapturedClip = {
   uri: string;
@@ -31,6 +32,25 @@ type ReelSummary = {
   path: string;
   hasFacecam: boolean;
   brollCount: number;
+};
+
+type EditPlanSummary = {
+  durationSec: number;
+  assets: number;
+  videoItems: number;
+  audioItems: number;
+  captionItems: number;
+};
+
+type GenerateEditPlanResult = {
+  reel?: ReelSummary;
+  editPlan?: EditPlanSummary;
+  files?: {
+    editPlan?: {
+      id: string;
+      name: string;
+    };
+  };
 };
 
 const REELIFY_API_URL = process.env.EXPO_PUBLIC_REELIFY_API_URL || 'http://localhost:8787';
@@ -58,12 +78,16 @@ export default function App() {
   const [reelStatus, setReelStatus] = useState('Loading reels');
   const [reelsLoading, setReelsLoading] = useState(true);
   const [creatingReel, setCreatingReel] = useState(false);
+  const [planState, setPlanState] = useState<PlanState>('idle');
+  const [planStatus, setPlanStatus] = useState('');
 
   const permissionsReady = Boolean(cameraPermission && microphonePermission);
   const permissionsGranted = Boolean(cameraPermission?.granted && microphonePermission?.granted);
   const isRecording = captureState === 'recording';
   const isSaving = captureState === 'saving';
   const activeReel = reels.find((reel) => reel.name === activeReelName) || null;
+  const planRunning = planState === 'running';
+  const planDisabled = planRunning || isRecording || isSaving || !activeReel?.hasFacecam;
 
   useEffect(() => {
     if (!isRecording) {
@@ -80,6 +104,13 @@ export default function App() {
   useEffect(() => {
     loadReels();
   }, []);
+
+  useEffect(() => {
+    if (!planRunning) {
+      setPlanState('idle');
+      setPlanStatus('');
+    }
+  }, [activeReelName]);
 
   async function requestPermissions() {
     await Promise.all([requestCameraPermission(), requestMicrophonePermission()]);
@@ -195,6 +226,8 @@ export default function App() {
 
     setUploadState('uploading');
     setStatusMessage(capturedClip.type === 'broll' ? 'Uploading and tagging' : 'Uploading facecam');
+    setPlanState('idle');
+    setPlanStatus('');
 
     try {
       if (!activeReelName) {
@@ -211,6 +244,32 @@ export default function App() {
     } catch (error) {
       setUploadState('error');
       setStatusMessage(getErrorMessage(error));
+    }
+  }
+
+  async function generateEditPlan() {
+    if (!activeReelName || planDisabled) {
+      if (!activeReel?.hasFacecam) {
+        setPlanStatus('Upload a talking clip first');
+      }
+
+      return;
+    }
+
+    setPlanState('running');
+    setPlanStatus('Generating plan');
+
+    try {
+      const result = await generateEditPlanOnServer(activeReelName);
+      if (result.reel) {
+        upsertReel(result.reel);
+      }
+
+      setPlanState('success');
+      setPlanStatus(formatPlanResult(result));
+    } catch (error) {
+      setPlanState('error');
+      setPlanStatus(getErrorMessage(error));
     }
   }
 
@@ -301,6 +360,27 @@ export default function App() {
         >
           <Text style={styles.roundToolButtonText}>Flip</Text>
         </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Generate edit plan"
+          disabled={planDisabled}
+          onPress={generateEditPlan}
+          style={({ pressed }) => [
+            styles.roundToolButton,
+            styles.planToolButton,
+            planState === 'success' && styles.planToolButtonSuccess,
+            planState === 'error' && styles.planToolButtonError,
+            pressed && styles.pressed,
+            planDisabled && styles.disabled,
+          ]}
+        >
+          {planRunning ? (
+            <ActivityIndicator color="#ffffff" />
+          ) : (
+            <Text style={styles.roundToolButtonText}>Plan</Text>
+          )}
+        </Pressable>
       </View>
 
       <View style={styles.bottomOverlay}>
@@ -327,7 +407,9 @@ export default function App() {
         </Pressable>
 
         <Text style={styles.helperText}>
-          {reelsLoading
+          {planStatus
+            ? planStatus
+            : reelsLoading
             ? 'Loading reels'
             : activeReel
               ? `${activeReel.hasFacecam ? 'Facecam set' : 'Need facecam'} / ${activeReel.brollCount} b-roll`
@@ -610,6 +692,27 @@ async function uploadClip(clip: CapturedClip, reelName: string) {
   };
 }
 
+async function generateEditPlanOnServer(reelName: string): Promise<GenerateEditPlanResult> {
+  const response = await expoFetch(`${REELIFY_API_URL}/api/reels/${reelName}/edit-plan`, {
+    method: 'POST',
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(getUploadError(response.status, responseText));
+  }
+
+  return JSON.parse(responseText) as GenerateEditPlanResult;
+}
+
+function formatPlanResult(result: GenerateEditPlanResult) {
+  if (!result.editPlan) {
+    return 'Plan ready';
+  }
+
+  return `Plan ready: ${Math.round(result.editPlan.durationSec)}s / ${result.editPlan.videoItems} video cuts`;
+}
+
 function getUploadError(status: number, responseText: string) {
   try {
     const payload = JSON.parse(responseText) as { error?: string; message?: string; code?: string };
@@ -760,6 +863,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 176,
     right: 18,
+    gap: 10,
   },
   roundToolButton: {
     width: 54,
@@ -775,6 +879,15 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '800',
+  },
+  planToolButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.62)',
+  },
+  planToolButtonSuccess: {
+    backgroundColor: 'rgba(30, 140, 78, 0.82)',
+  },
+  planToolButtonError: {
+    backgroundColor: 'rgba(179, 45, 45, 0.86)',
   },
   bottomOverlay: {
     position: 'absolute',

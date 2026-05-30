@@ -264,6 +264,7 @@ export const EditPlanSchema = z
 
 export type EditContext = z.infer<typeof EditContextSchema>;
 export type EditPlan = z.infer<typeof EditPlanSchema>;
+export type Recipe = z.infer<typeof RecipeSchema>;
 export type VideoItem = z.infer<typeof VideoItemSchema>;
 export type AudioItem = z.infer<typeof AudioItemSchema>;
 export type CaptionItem = z.infer<typeof CaptionItemSchema>;
@@ -433,6 +434,8 @@ function validateTracks(ctx: z.RefinementCtx, plan: EditPlan): void {
     });
   });
 
+  validateVideoCoverage(ctx, plan);
+
   plan.tracks.audio.forEach((track, trackIndex) => {
     validateTrackId(ctx, ["tracks", "audio", trackIndex, "id"], track.id, trackIds);
     validateNoOverlaps(ctx, ["tracks", "audio", trackIndex, "items"], track.items);
@@ -463,6 +466,35 @@ function validateTracks(ctx: z.RefinementCtx, plan: EditPlan): void {
       validateCaptionTokens(ctx, [...path, "tokens"], item);
     });
   });
+}
+
+function validateVideoCoverage(ctx: z.RefinementCtx, plan: EditPlan): void {
+  const intervals = plan.tracks.video
+    .flatMap((track) => track.items)
+    .map((item) => ({
+      start: item.timelineInSec,
+      end: item.timelineOutSec,
+    }))
+    .sort((a, b) => a.start - b.start);
+
+  if (intervals.length === 0) {
+    addIssue(ctx, ["tracks", "video"], "video timeline must contain at least one item");
+    return;
+  }
+
+  let coveredUntil = 0;
+  for (const interval of intervals) {
+    if (interval.start > coveredUntil + EPSILON) {
+      addIssue(ctx, ["tracks", "video"], "video items must cover the full output duration without blank gaps");
+      return;
+    }
+    coveredUntil = Math.max(coveredUntil, interval.end);
+    if (coveredUntil >= plan.output.durationSec - EPSILON) {
+      return;
+    }
+  }
+
+  addIssue(ctx, ["tracks", "video"], "video items must cover the full output duration without a blank tail");
 }
 
 function validateTimedAssetItem(
@@ -560,18 +592,10 @@ function validateLayout(
   ctx: z.RefinementCtx,
   path: Array<string | number>,
   layout: z.infer<typeof LayoutSchema>,
-  output: EditPlan["output"],
+  _output: EditPlan["output"],
 ): void {
-  requireNonNegative(ctx, [...path, "x"], layout.x, "layout.x must be non-negative");
-  requireNonNegative(ctx, [...path, "y"], layout.y, "layout.y must be non-negative");
   requirePositive(ctx, [...path, "width"], layout.width, "layout.width must be positive");
   requirePositive(ctx, [...path, "height"], layout.height, "layout.height must be positive");
-  if (layout.x + layout.width > output.width + EPSILON) {
-    addIssue(ctx, [...path, "width"], "layout must fit within output.width");
-  }
-  if (layout.y + layout.height > output.height + EPSILON) {
-    addIssue(ctx, [...path, "height"], "layout must fit within output.height");
-  }
 
   if (layout.crop) {
     requireNonNegative(ctx, [...path, "crop", "x"], layout.crop.x, "crop.x must be non-negative");

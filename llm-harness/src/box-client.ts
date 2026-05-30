@@ -1,3 +1,9 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
+const BOX_API_BASE = "https://api.box.com/2.0";
+const BOX_UPLOAD_BASE = "https://upload.box.com/api/2.0";
+
 export type BoxItemType = "file" | "folder" | "web_link";
 
 export type BoxItem = {
@@ -25,7 +31,7 @@ export class BoxClient {
     const limit = 1000;
 
     while (true) {
-      const url = new URL(`https://api.box.com/2.0/folders/${folderId}/items`);
+      const url = new URL(`${BOX_API_BASE}/folders/${folderId}/items`);
       url.searchParams.set("limit", String(limit));
       url.searchParams.set("offset", String(offset));
       url.searchParams.set("fields", "id,type,name");
@@ -56,8 +62,33 @@ export class BoxClient {
     return items.find((item) => item.type === "file" && item.name === name) ?? null;
   }
 
+  async ensureFolder(parentFolderId: string, name: string): Promise<BoxItem> {
+    const existing = await this.findFolder(parentFolderId, name);
+    if (existing) {
+      return existing;
+    }
+
+    return this.requestJson<BoxItem>(`${BOX_API_BASE}/folders`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, parent: { id: parentFolderId } }),
+    });
+  }
+
+  async uploadFileOrVersion(folderId: string, filePath: string, mimeType = "application/octet-stream"): Promise<BoxItem> {
+    const fileName = path.basename(filePath);
+    const existing = await this.findFile(folderId, fileName);
+    const bytes = await readFile(filePath);
+
+    if (existing) {
+      return this.uploadBufferVersion(existing.id, fileName, bytes, mimeType);
+    }
+
+    return this.uploadBuffer(folderId, fileName, bytes, mimeType);
+  }
+
   async downloadTextFile(fileId: string): Promise<string> {
-    const response = await this.request(`https://api.box.com/2.0/files/${fileId}/content`);
+    const response = await this.request(`${BOX_API_BASE}/files/${fileId}/content`);
     return response.text();
   }
 
@@ -70,9 +101,37 @@ export class BoxClient {
     }
   }
 
-  private async requestJson<T>(url: URL | string): Promise<T> {
-    const response = await this.request(url);
+  private async requestJson<T>(url: URL | string, init: RequestInit = {}): Promise<T> {
+    const response = await this.request(url, init);
     return (await response.json()) as T;
+  }
+
+  private async uploadBuffer(folderId: string, name: string, bytes: Buffer, mimeType: string): Promise<BoxItem> {
+    const formData = new FormData();
+    formData.append("attributes", JSON.stringify({ name, parent: { id: folderId } }));
+    formData.append("file", new Blob([toArrayBuffer(bytes)], { type: mimeType }), name);
+
+    const response = await this.request(`${BOX_UPLOAD_BASE}/files/content`, {
+      method: "POST",
+      body: formData,
+    });
+    const payload = (await response.json()) as { entries?: BoxItem[] };
+
+    return payload.entries?.[0] ?? (payload as unknown as BoxItem);
+  }
+
+  private async uploadBufferVersion(fileId: string, name: string, bytes: Buffer, mimeType: string): Promise<BoxItem> {
+    const formData = new FormData();
+    formData.append("attributes", JSON.stringify({ name }));
+    formData.append("file", new Blob([toArrayBuffer(bytes)], { type: mimeType }), name);
+
+    const response = await this.request(`${BOX_UPLOAD_BASE}/files/${fileId}/content`, {
+      method: "POST",
+      body: formData,
+    });
+    const payload = (await response.json()) as { entries?: BoxItem[] };
+
+    return payload.entries?.[0] ?? (payload as unknown as BoxItem);
   }
 
   private async request(url: URL | string, init: RequestInit = {}): Promise<Response> {
@@ -161,6 +220,10 @@ export function createBoxClientFromEnv(env: NodeJS.ProcessEnv): BoxClient {
 function optionalEnv(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function toArrayBuffer(bytes: Buffer): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 function errorMessage(error: unknown): string {

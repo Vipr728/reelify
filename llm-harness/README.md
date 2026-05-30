@@ -56,6 +56,7 @@ Build context from Box for a reel folder:
 ```bash
 npm run llm:context:box -- \
   --reel reel_001 \
+  --recipe path/to/apify-recipe.json \
   --output llm-harness/out/context.reel_001.json
 ```
 
@@ -88,3 +89,6 @@ OPENAI_API_KEY=... npm run llm:plan -- \
 
 Override the model with `--model` or `OPENAI_MODEL`. The default is
 `gpt-4o-2024-08-06` because it supports strict structured outputs.
+
+`--recipe` accepts either the harness' flat recipe shape or the nested Apify
+recipe shape produced by `apify-integration`.

@@ -8,6 +8,7 @@
     "build": "tsc -p .",
     "dev": "tsx src/cli.ts",
     "pipeline": "tsx src/cli.ts",
+    "pipeline:json": "tsx src/pipeline-json.ts",
     "transcribe": "tsx src/cli.ts transcribe",
     "niche": "tsx src/cli.ts niche",
     "creators": "tsx src/cli.ts creators",

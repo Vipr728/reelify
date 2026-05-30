@@ -30,6 +30,14 @@ Box layout:
         /clip_001
           clip.mp4
           metadata.json
+      /outputs
+        /apify
+          apify-report.reel_001.json
+          apify-recipe.reel_001.json
+        /llm-harness
+          context.reel_001.json
+        /editing instructions
+          edit-plan.reel_001.json
       reel_manifest.json
 ```
 
@@ -42,3 +50,11 @@ falling back to `BOX_RAW_FOLDER_ID`.
 - `apify-integration/` — scraping top creators, extracting video patterns, and outputting quantified JSON.
 - `llm-harness/` — niche inference, prompt orchestration, and feeding creator patterns into LLM workflows.
 - `frontend-and-tools/` — Expo UI work plus FFmpeg/editing tool integration.
+
+## Generate edit instructions
+
+After uploading a talking clip and b-roll for the active reel, tap `Plan` in the
+Expo app. The server reads the Box transcript, runs the Apify creator pipeline
+with that script, stores the Apify report/recipe under the reel's `outputs`
+folder, runs `llm-harness` with the Box assets plus recipe, and stores the final
+strict edit-plan JSON under `outputs/editing instructions`.

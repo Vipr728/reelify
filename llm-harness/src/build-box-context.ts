@@ -8,7 +8,8 @@ import { z } from "zod";
 
 import { BoxClient, createBoxClientFromEnv, type BoxItem } from "./box-client";
 import { DEFAULT_RECIPE } from "./default-recipe";
-import { EditContextSchema, RecipeSchema, type EditContext } from "./schema";
+import { parseRecipeInput } from "./recipe";
+import { EditContextSchema, type EditContext } from "./schema";
 
 type CliOptions = {
   reelId: string;
@@ -56,7 +57,9 @@ export async function buildEditContextFromBoxReel(
   const manifestFile = requireFile(reelItems, "reel_manifest.json", reel.boxPath);
 
   const manifest = await box.downloadJsonFile(manifestFile.id);
-  const recipe = options.recipePath ? RecipeSchema.parse(JSON.parse(await readFile(options.recipePath, "utf8"))) : DEFAULT_RECIPE;
+  const recipe = options.recipePath
+    ? parseRecipeInput(JSON.parse(await readFile(options.recipePath, "utf8")), options.recipePath)
+    : DEFAULT_RECIPE;
 
   const facecamItems = await box.listFolderItems(facecamFolder.id);
   const facecamFile = requireFile(facecamItems, "facecam.mp4", `${reel.boxPath}/facecam`);
@@ -191,7 +194,7 @@ function parseArgs(args: string[], env: NodeJS.ProcessEnv): CliOptions {
         "  --reel-folder-id <id>      Direct Box folder ID for the reel.",
         "  --root-folder-name <name>  Defaults to Reelify-Hackathon.",
         "  --reels-folder-name <name> Defaults to reels.",
-        "  --recipe <path>            Optional recipe JSON matching RecipeSchema.",
+        "  --recipe <path>            Optional flat harness recipe or Apify recipe JSON.",
       ].join("\n"),
     );
     process.exit(0);
