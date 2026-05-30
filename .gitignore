@@ -38,6 +38,12 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+# llm harness output
+llm-harness/out/
+
+# local upload/tagging server scratch files
+server/.tmp/
+
 # generated native folders
 /ios
 /android

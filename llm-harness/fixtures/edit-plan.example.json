@@ -1,0 +1,295 @@
+{
+  "schemaVersion": "1.0",
+  "output": {
+    "aspectRatio": "9:16",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "durationSec": 20
+  },
+  "assets": [
+    {
+      "id": "talk_001",
+      "kind": "talking_head",
+      "uri": "raw/talking-head-01.mp4",
+      "boxFileId": null,
+      "boxPath": null,
+      "durationSec": 42.4
+    },
+    {
+      "id": "broll_001",
+      "kind": "broll",
+      "uri": "raw/dashboard-broll-01.mp4",
+      "boxFileId": null,
+      "boxPath": null,
+      "durationSec": 8.2
+    },
+    {
+      "id": "broll_002",
+      "kind": "broll",
+      "uri": "raw/timeline-broll-01.mp4",
+      "boxFileId": null,
+      "boxPath": null,
+      "durationSec": 7.5
+    }
+  ],
+  "styles": {
+    "captions": [
+      {
+        "id": "caption_primary",
+        "fontFamily": "Inter",
+        "fontSizePx": 72,
+        "fontWeight": "black",
+        "color": "#FFFFFF",
+        "highlightColor": "#00E5FF",
+        "backgroundColor": "#000000AA",
+        "strokeColor": "#000000",
+        "strokeWidthPx": 6,
+        "x": 80,
+        "y": 1380,
+        "maxWidthPx": 920,
+        "align": "center",
+        "case": "sentence",
+        "animation": "karaoke"
+      }
+    ]
+  },
+  "tracks": {
+    "video": [
+      {
+        "id": "video_main",
+        "role": "main",
+        "zIndex": 0,
+        "items": [
+          {
+            "id": "main_001",
+            "assetId": "talk_001",
+            "sourceInSec": 0,
+            "sourceOutSec": 5.2,
+            "timelineInSec": 0,
+            "timelineOutSec": 5.2,
+            "playbackRate": 1,
+            "opacity": 1,
+            "audio": "keep",
+            "layout": {
+              "mode": "cover",
+              "x": 0,
+              "y": 0,
+              "width": 1080,
+              "height": 1920,
+              "crop": null
+            }
+          },
+          {
+            "id": "main_002",
+            "assetId": "talk_001",
+            "sourceInSec": 7.1,
+            "sourceOutSec": 13.6,
+            "timelineInSec": 5.2,
+            "timelineOutSec": 11.7,
+            "playbackRate": 1,
+            "opacity": 1,
+            "audio": "keep",
+            "layout": {
+              "mode": "cover",
+              "x": 0,
+              "y": 0,
+              "width": 1080,
+              "height": 1920,
+              "crop": null
+            }
+          },
+          {
+            "id": "main_003",
+            "assetId": "talk_001",
+            "sourceInSec": 16,
+            "sourceOutSec": 24.3,
+            "timelineInSec": 11.7,
+            "timelineOutSec": 20,
+            "playbackRate": 1,
+            "opacity": 1,
+            "audio": "keep",
+            "layout": {
+              "mode": "cover",
+              "x": 0,
+              "y": 0,
+              "width": 1080,
+              "height": 1920,
+              "crop": null
+            }
+          }
+        ]
+      },
+      {
+        "id": "video_overlay",
+        "role": "overlay",
+        "zIndex": 1,
+        "items": [
+          {
+            "id": "overlay_001",
+            "assetId": "broll_001",
+            "sourceInSec": 0.4,
+            "sourceOutSec": 3.6,
+            "timelineInSec": 5.2,
+            "timelineOutSec": 8.4,
+            "playbackRate": 1,
+            "opacity": 1,
+            "audio": "mute",
+            "layout": {
+              "mode": "cover",
+              "x": 0,
+              "y": 0,
+              "width": 1080,
+              "height": 1920,
+              "crop": null
+            }
+          },
+          {
+            "id": "overlay_002",
+            "assetId": "broll_002",
+            "sourceInSec": 1.2,
+            "sourceOutSec": 4.8,
+            "timelineInSec": 13.4,
+            "timelineOutSec": 17,
+            "playbackRate": 1,
+            "opacity": 1,
+            "audio": "mute",
+            "layout": {
+              "mode": "cover",
+              "x": 0,
+              "y": 0,
+              "width": 1080,
+              "height": 1920,
+              "crop": null
+            }
+          }
+        ]
+      }
+    ],
+    "audio": [
+      {
+        "id": "audio_dialogue",
+        "role": "dialogue",
+        "items": [
+          {
+            "id": "dialogue_001",
+            "assetId": "talk_001",
+            "sourceInSec": 0,
+            "sourceOutSec": 5.2,
+            "timelineInSec": 0,
+            "timelineOutSec": 5.2,
+            "volumeDb": 0,
+            "fadeInSec": 0,
+            "fadeOutSec": 0
+          },
+          {
+            "id": "dialogue_002",
+            "assetId": "talk_001",
+            "sourceInSec": 7.1,
+            "sourceOutSec": 13.6,
+            "timelineInSec": 5.2,
+            "timelineOutSec": 11.7,
+            "volumeDb": 0,
+            "fadeInSec": 0,
+            "fadeOutSec": 0
+          },
+          {
+            "id": "dialogue_003",
+            "assetId": "talk_001",
+            "sourceInSec": 16,
+            "sourceOutSec": 24.3,
+            "timelineInSec": 11.7,
+            "timelineOutSec": 20,
+            "volumeDb": 0,
+            "fadeInSec": 0,
+            "fadeOutSec": 0
+          }
+        ]
+      }
+    ],
+    "captions": [
+      {
+        "id": "captions_primary",
+        "role": "captions",
+        "zIndex": 2,
+        "items": [
+          {
+            "id": "caption_001",
+            "timelineInSec": 0,
+            "timelineOutSec": 3.1,
+            "text": "The fastest way to make better short videos",
+            "tokens": [
+              {
+                "text": "The fastest",
+                "timelineInSec": 0,
+                "timelineOutSec": 1.1,
+                "highlight": true
+              },
+              {
+                "text": "way to make",
+                "timelineInSec": 1.1,
+                "timelineOutSec": 2,
+                "highlight": false
+              },
+              {
+                "text": "better short videos",
+                "timelineInSec": 2,
+                "timelineOutSec": 3.1,
+                "highlight": true
+              }
+            ],
+            "styleId": "caption_primary"
+          },
+          {
+            "id": "caption_002",
+            "timelineInSec": 5.2,
+            "timelineOutSec": 8.4,
+            "text": "Show the result first",
+            "tokens": [
+              {
+                "text": "Show the",
+                "timelineInSec": 5.2,
+                "timelineOutSec": 6.2,
+                "highlight": false
+              },
+              {
+                "text": "result",
+                "timelineInSec": 6.2,
+                "timelineOutSec": 7.3,
+                "highlight": true
+              },
+              {
+                "text": "first",
+                "timelineInSec": 7.3,
+                "timelineOutSec": 8.4,
+                "highlight": true
+              }
+            ],
+            "styleId": "caption_primary"
+          },
+          {
+            "id": "caption_003",
+            "timelineInSec": 13.4,
+            "timelineOutSec": 17,
+            "text": "Cut every dead pause",
+            "tokens": [
+              {
+                "text": "Cut every",
+                "timelineInSec": 13.4,
+                "timelineOutSec": 14.7,
+                "highlight": false
+              },
+              {
+                "text": "dead pause",
+                "timelineInSec": 14.7,
+                "timelineOutSec": 17,
+                "highlight": true
+              }
+            ],
+            "styleId": "caption_primary"
+          }
+        ]
+      }
+    ]
+  }
+}

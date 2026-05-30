@@ -1,0 +1,77 @@
+{
+  "schemaVersion": "1.0",
+  "reel": {
+    "id": "reel_001",
+    "boxFolderId": null,
+    "boxPath": "/Reelify-Hackathon/reels/reel_001",
+    "manifest": {
+      "status": "fixture"
+    }
+  },
+  "request": "Create a 40 second vertical short from the talking-head clip. Use b-roll to cover cuts and show the product moments. Add readable captions with keyword highlights.",
+  "output": {
+    "aspectRatio": "9:16",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "targetDurationSec": 40
+  },
+  "assets": [
+    {
+      "id": "talk_001",
+      "kind": "talking_head",
+      "uri": "raw/talking-head-01.mp4",
+      "boxFileId": null,
+      "boxPath": null,
+      "durationSec": 42.4,
+      "description": "Creator speaking directly to camera about the app workflow.",
+      "transcript": "The fastest way to make better short videos is to stop guessing. Start with the hook, cut every dead pause, show the result first, then use b-roll whenever the viewer needs proof.",
+      "metadata": {
+        "headPosition": "center"
+      }
+    },
+    {
+      "id": "broll_001",
+      "kind": "broll",
+      "uri": "raw/dashboard-broll-01.mp4",
+      "boxFileId": null,
+      "boxPath": null,
+      "durationSec": 8.2,
+      "description": "Screen recording of the dashboard with a visible finished video result.",
+      "transcript": "",
+      "metadata": {
+        "description": "Screen recording of the dashboard with a visible finished video result."
+      }
+    },
+    {
+      "id": "broll_002",
+      "kind": "broll",
+      "uri": "raw/timeline-broll-01.mp4",
+      "boxFileId": null,
+      "boxPath": null,
+      "durationSec": 7.5,
+      "description": "Close-up screen recording of trimming pauses on a video timeline.",
+      "transcript": "",
+      "metadata": {
+        "description": "Close-up screen recording of trimming pauses on a video timeline."
+      }
+    }
+  ],
+  "recipe": {
+    "durationSec": 40,
+    "pacing": "8 cuts · 2.1/10s · avg 4.76s between cuts",
+    "pacingPattern": "moderate",
+    "captions": "word-by-word · center · 41px · #FFFFFF on #000000 · pop-in",
+    "broll": "3 cutaways · avg 1.5s · interspersed · kinds: startup activities, personal branding visuals, entrepreneurship scenarios",
+    "audio": "inspiring background music · throughout · start 0s to end",
+    "hook": "personal introduction · 5s",
+    "summary": "Create a 40-second reel featuring Vahan introducing himself and his passion for startups and personal branding. Use a pacing of about 2.1 cuts per 10 seconds with moderate b-roll interspersed throughout, focusing on startup activities and branding visuals. Present word-by-word captions in the center with white text on a black background, and maintain inspiring music throughout the video.",
+    "source": "/Users/vihaanshringi/reelify/out/recipe-2026-05-30T09-47-02-122Z.json"
+  },
+  "style": {
+    "pacing": "fast",
+    "captionCase": "sentence",
+    "captionAnimation": "karaoke",
+    "brollDensity": "medium"
+  }
+}
