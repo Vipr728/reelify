@@ -5,17 +5,28 @@ const OPENAI = "https://api.openai.com/v1";
 const key = () => Deno.env.get("OPENAI_API_KEY")!;
 
 // Whisper speech-to-text. `bytes` is the raw clip downloaded from Box.
-export async function transcribe(bytes: Uint8Array, filename = "clip.mp4"): Promise<string> {
+// Returns text plus duration (seconds) so clips.duration_s can be populated.
+export interface Transcription {
+  text: string;
+  duration: number;
+}
+
+export async function transcribe(bytes: Uint8Array, filename = "clip.mp4"): Promise<Transcription> {
   const form = new FormData();
   form.append("file", new Blob([bytes]), filename);
   form.append("model", "whisper-1");
+  form.append("response_format", "verbose_json"); // { text, duration, language, segments, ... }
   const res = await fetch(`${OPENAI}/audio/transcriptions`, {
     method: "POST",
     headers: { authorization: `Bearer ${key()}` },
     body: form,
   });
   if (!res.ok) throw new Error(`Whisper failed: ${await res.text()}`);
-  return (await res.json()).text ?? "";
+  const json = await res.json();
+  return {
+    text: json.text ?? "",
+    duration: typeof json.duration === "number" ? json.duration : 0,
+  };
 }
 
 export async function embed(text: string): Promise<number[]> {
@@ -46,14 +57,39 @@ async function chatJSON(system: string, user: string): Promise<any> {
 }
 
 // Pull the structured datapoint out of a transcript.
-export async function extractDatapoint(transcript: string) {
-  return await chatJSON(
+export interface Datapoint {
+  topic: string;
+  keywords: string[];
+  sentiment: "positive" | "neutral" | "negative";
+  hook_candidate: boolean;
+  broll_candidate: boolean;
+}
+
+// Coerce model output to a bool; the model sometimes returns "true"/"false" strings.
+function asBool(v: unknown): boolean {
+  return v === true || String(v).trim().toLowerCase() === "true";
+}
+
+export async function extractDatapoint(transcript: string): Promise<Datapoint> {
+  const raw = await chatJSON(
     "You label short vertical video clips. Return ONLY JSON with keys: " +
       "topic (string), keywords (string array, max 8), sentiment " +
       "('positive'|'neutral'|'negative'), hook_candidate (bool, is this a strong opener), " +
       "broll_candidate (bool, works as a silent cutaway).",
     `Transcript: """${transcript}"""`,
   );
+
+  // Defensive normalization so the db never gets bad values.
+  const sentiment = String(raw.sentiment ?? "").trim().toLowerCase();
+  return {
+    topic: String(raw.topic ?? "").slice(0, 200),
+    keywords: Array.isArray(raw.keywords)
+      ? raw.keywords.map((x: unknown) => String(x)).filter((x: string) => x.length > 0).slice(0, 8)
+      : [],
+    sentiment: sentiment === "positive" || sentiment === "negative" ? sentiment : "neutral",
+    hook_candidate: asBool(raw.hook_candidate),
+    broll_candidate: asBool(raw.broll_candidate),
+  };
 }
 
 // Produce the edit decision list the FFmpeg worker executes.
