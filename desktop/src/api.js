@@ -117,11 +117,13 @@ export function normalizeAnalysis(payload) {
     clip: "Talking",
     text: (s.text || "").trim(),
   }));
+  const vt = payload.videoType || niche.video_type || null;
   return {
     transcript: payload.transcript || { text: "", source: "user-video-transcribed" },
     segments: segs,
     topics: topicsFromNiche(niche),
     throughline: niche.rationale || niche.label || "",
+    videoType: vt && vt.label ? { label: vt.label, rationale: vt.rationale || "", confidence: vt.confidence ?? null } : null,
     niche, // raw — threaded forward to stage 4 + 5
   };
 }
@@ -141,6 +143,7 @@ export function demoAnalysis() {
     segments: D.transcript.map((s) => ({ t: s.t, clip: s.clip, text: s.text })),
     topics: D.topics,
     throughline: D.throughline,
+    videoType: { label: "talking head", rationale: "demo", confidence: null },
     niche: {
       label: "Founder-led growth",
       keywords: D.topics.map((t) => t.label),

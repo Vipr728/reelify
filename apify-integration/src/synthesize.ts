@@ -8,6 +8,20 @@ import type { CreatorPatternReport, Recipe } from './types.js';
 // This is the only LLM step in the whole pipeline; everything before it
 // was deterministic ffmpeg / OCR or constrained extraction.
 
+// gpt-4o-mini in json_object mode sometimes emits booleans as strings
+// ("true"/"yes"/"1") or numbers. Coerce them instead of hard-failing the
+// whole pipeline (which would otherwise drop the user back to demo data).
+const zBool = z.preprocess((v) => {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (['true', 'yes', 'y', '1'].includes(s)) return true;
+    if (['false', 'no', 'n', '0', ''].includes(s)) return false;
+  }
+  return v; // anything else falls through to z.boolean() and errors clearly
+}, z.boolean());
+
 const RecipeSchema = z.object({
   target_duration_s: z.number().positive(),
   pacing: z.object({
@@ -17,7 +31,7 @@ const RecipeSchema = z.object({
     pattern: z.string().min(1),
   }),
   captions: z.object({
-    present: z.boolean(),
+    present: zBool,
     style: z.string().min(1),
     position: z.enum(['top', 'center', 'bottom']),
     size_px: z.number().nonnegative(),
@@ -26,14 +40,14 @@ const RecipeSchema = z.object({
     animation: z.string().nullable(),
   }),
   broll: z.object({
-    use: z.boolean(),
+    use: zBool,
     count: z.number().int().nonnegative(),
     avg_duration_s: z.number().nonnegative(),
     placement: z.string().min(1),
     suggested_kinds: z.array(z.string()).default([]),
   }),
   audio: z.object({
-    music: z.boolean(),
+    music: zBool,
     start_at_s: z.number().nonnegative(),
     end_at_s: z.number().nullable(),
     pattern: z.enum(['throughout', 'intro-only', 'outro-only', 'gaps']),
@@ -60,6 +74,9 @@ Rules:
 - Use real numbers, never ranges ("3.2 cuts per 10s", not "3-4").
 - For colors, suggest a concrete hex value (white captions on a black box is fine if you can't tell).
 - Be opinionated. Vague answers force the assembly LLM to guess.
+
+Boolean fields (captions.present, broll.use, audio.music) MUST be JSON booleans
+true/false — never the strings "true"/"false"/"yes"/"no".
 
 Output JSON only, exactly matching the schema. No prose outside the JSON.`;
 

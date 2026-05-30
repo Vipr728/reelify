@@ -37,7 +37,7 @@ const RankedSchema = z.object({
     .min(0),
 });
 
-async function tavilySearch(query: string, maxResults: number) {
+async function tavilySearch(query: string, maxResults: number, includeDomains?: string[]) {
   const env = loadEnv();
   const res = await request('https://api.tavily.com/search', {
     method: 'POST',
@@ -48,7 +48,11 @@ async function tavilySearch(query: string, maxResults: number) {
       search_depth: 'advanced',
       include_answer: false,
       max_results: maxResults,
-      include_domains: ['instagram.com', 'socialblade.com', 'hypeauditor.com', 'creatordb.app'],
+      // NOTE: restricting to instagram.com makes Tavily return individual
+      // post/reel URLs (instagram.com/reel/..., /p/...) whose path segment is
+      // not a handle. Leaving domains open surfaces aggregator/listicle pages
+      // (socialblade, blogs) that actually name creator handles in their text.
+      ...(includeDomains && includeDomains.length ? { include_domains: includeDomains } : {}),
     }),
   });
   if (res.statusCode >= 400) {
@@ -59,21 +63,42 @@ async function tavilySearch(query: string, maxResults: number) {
   return TavilyResultSchema.parse(json).results;
 }
 
-// IG path segments that aren't user handles.
+// IG path segments / generic words that aren't user handles.
 const HANDLE_BLOCKLIST = new Set([
   'p', 'reel', 'reels', 'tv', 'stories', 'explore', 'accounts', 'directory',
   'about', 'developer', 'legal', 'press', 'api', 'web', 'tags', 'topics',
+  'popular', 'create', 'login', 'signup', 'help', 'privacy', 'terms',
+  'instagram', 'igtv', 'channel',
+  // generic single words that resolve to real-but-irrelevant IG pages
+  'edit', 'edits', 'editing', 'video', 'videos', 'ai', 'reel', 'content',
+  'creator', 'creators', 'app', 'apps', 'tools', 'tool', 'media', 'official',
 ]);
 
+function addHandle(counts: Map<string, number>, raw: string, weight = 1) {
+  const h = raw.toLowerCase().replace(/[/?#].*$/, '').trim();
+  if (!h || h.length < 2 || h.length > 30) return;
+  if (HANDLE_BLOCKLIST.has(h)) return;
+  if (!/^[a-z0-9._]+$/.test(h)) return;
+  if (!/[a-z]/.test(h)) return; // skip pure-number/punctuation tokens
+  counts.set(h, (counts.get(h) ?? 0) + weight);
+}
+
 function extractHandles(snippets: string[]): string[] {
-  const re = /\b(?:www\.)?instagram\.com\/([A-Za-z0-9._]+)/g;
+  // 1) instagram.com/<handle> profile URLs (NOT /p/ or /reel/ post URLs).
+  const urlRe = /\b(?:www\.)?instagram\.com\/([A-Za-z0-9._]+)/g;
+  // 2) @handle mentions in titles/snippet text (how listicles name creators).
+  const atRe = /(?:^|[\s(>"'])@([A-Za-z0-9._]{2,30})\b/g;
   const counts = new Map<string, number>();
+
   for (const text of snippets) {
-    for (const m of text.matchAll(re)) {
-      const h = m[1].toLowerCase().replace(/[/?#].*$/, '');
-      if (!h || h.length < 2 || h.length > 30) continue;
-      if (HANDLE_BLOCKLIST.has(h)) continue;
-      counts.set(h, (counts.get(h) ?? 0) + 1);
+    for (const m of text.matchAll(urlRe)) {
+      const seg = m[1].toLowerCase();
+      // skip post/reel/tv URLs whose first segment is a content type
+      if (HANDLE_BLOCKLIST.has(seg)) continue;
+      addHandle(counts, seg, 2); // profile URL is a strong signal
+    }
+    for (const m of text.matchAll(atRe)) {
+      addHandle(counts, m[1], 1);
     }
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([h]) => h);
@@ -92,11 +117,24 @@ export async function findTopCreators(niche: Niche): Promise<Creator[]> {
   const env = loadEnv();
   const topN = env.TAVILY_TOP_N;
 
-  const query = `top instagram creators ${niche.label} ${niche.keywords.slice(0, 3).join(' ')} site:instagram.com`;
+  // Open-web search (no site: restriction). Aggregator/listicle pages name the
+  // actual creator handles in their text; instagram.com-only results were just
+  // individual post URLs with no handle in the path.
+  const query = `best instagram creators ${niche.label} ${niche.keywords.slice(0, 3).join(' ')}`;
   const results = await tavilySearch(query, Math.max(topN * 4, 15));
 
   const snippets = results.map((r) => `${r.title}\n${r.url}\n${r.content}`);
-  const candidates = extractHandles(snippets);
+  let candidates = extractHandles(snippets);
+
+  // Fallback: if the open query found nothing, retry restricted to instagram.com.
+  if (candidates.length === 0) {
+    const fallback = await tavilySearch(
+      `instagram ${niche.label} ${niche.keywords.slice(0, 3).join(' ')}`,
+      Math.max(topN * 4, 15),
+      ['instagram.com', 'socialblade.com', 'hypeauditor.com'],
+    );
+    candidates = extractHandles(fallback.map((r) => `${r.title}\n${r.url}\n${r.content}`));
+  }
 
   if (candidates.length === 0) return [];
 
@@ -137,11 +175,11 @@ export async function findTopCreators(niche: Niche): Promise<Creator[]> {
         why: 'Extracted from Tavily results (GPT did not rank).',
       }));
 
-  return chosen.map<Creator>((c) => ({
+  return chosen.slice(0, topN).map<Creator>((c) => ({
     handle: c.handle,
     display_name: c.display_name,
     profile_url: `https://www.instagram.com/${c.handle}/`,
     source: 'tavily',
-    why: c.why,
+    why: (c as { why?: string }).why || 'Matched your niche.',
   }));
 }

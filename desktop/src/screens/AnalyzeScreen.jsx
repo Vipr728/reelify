@@ -70,6 +70,16 @@ export default function AnalyzeScreen({ analysis, loading, error, demo, onRetry,
       <h1 className="h1 rise">What it's <em>about</em></h1>
       <p className="lede rise" style={{ animationDelay: ".08s" }}>Niche: {niche.label} · audience: {niche.audience}</p>
 
+      {analysis.videoType && (
+        <div className="vtype rise" style={{ animationDelay: ".1s" }} title={analysis.videoType.rationale}>
+          <span className="vtype-k">Format</span>
+          <span className="vtype-v">{analysis.videoType.label}</span>
+          {typeof analysis.videoType.confidence === "number" && (
+            <span className="vtype-c">{Math.round(analysis.videoType.confidence * 100)}%</span>
+          )}
+        </div>
+      )}
+
       {demo && <div className="demo-badge">Demo data · backend unreachable</div>}
 
       <div className="throughline rise" style={{ animationDelay: ".14s", marginTop: 30 }}>

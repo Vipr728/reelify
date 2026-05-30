@@ -5,8 +5,9 @@ const multer = require('multer');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
+const { Readable } = require('node:stream');
 
 dotenv.config({ quiet: true });
 
@@ -19,6 +20,7 @@ const UPLOAD_DIR = path.join(TMP_ROOT, 'uploads');
 const WORK_DIR = path.join(TMP_ROOT, 'work');
 const PLAN_WORK_DIR = path.join(WORK_DIR, 'plans');
 const APIFY_INTEGRATION_DIR = path.join(PROJECT_ROOT, 'apify-integration');
+const APIFY_TSX = path.join(APIFY_INTEGRATION_DIR, 'node_modules', '.bin', 'tsx');
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const BOX_API_BASE = 'https://api.box.com/2.0';
 const BOX_UPLOAD_BASE = 'https://upload.box.com/api/2.0';
@@ -36,7 +38,7 @@ const upload = multer({
 
 let boxTokenCache = null;
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_request, response) => {
   response.json({
@@ -136,9 +138,436 @@ app.post('/api/reels/:reelName/edit-plan', async (request, response) => {
   }
 });
 
+// --- Desktop stage 3: read stored transcript + infer niche ---
+app.post('/api/reels/:reelName/analyze', async (request, response) => {
+  try {
+    const reelName = normalizeRequiredReelName(request.params.reelName);
+    const box = await createBoxClient();
+    const reelsFolder = await box.getReelsFolder();
+    const reelFolder = await box.getReelFolderByName(reelsFolder.id, reelName);
+
+    const { text, segments } = await readFacecamTranscript(box, reelFolder);
+    if (!isUsableTranscript(text)) {
+      throw new Error(`Transcript for ${reelName} is not ready. Record/upload a facecam clip first.`);
+    }
+
+    const niche = await inferNicheNative(text);
+    response.json({
+      ok: true,
+      reelName,
+      transcript: { text, source: 'box-stored' },
+      segments,
+      niche,
+      videoType: niche.video_type || null,
+    });
+  } catch (error) {
+    console.error(error);
+    response.status(500).json({ error: getPublicErrorMessage(error) });
+  }
+});
+
+// --- Desktop stage 4: similar creators (apify: Tavily + GPT rank) ---
+app.post('/api/creators', async (request, response) => {
+  try {
+    const niche = request.body && request.body.niche;
+    if (!niche || !niche.label) {
+      response.status(400).json({ error: 'niche is required (run analyze first).' });
+      return;
+    }
+    const creators = await runApifyStage('creators', niche, { timeoutMs: 120000 });
+    response.json({ ok: true, creators });
+  } catch (error) {
+    console.error(error);
+    response.status(500).json({ error: getPublicErrorMessage(error) });
+  }
+});
+
+// --- Desktop stage 5: master style (scrape -> quantify -> aggregate -> synthesize) ---
+app.post('/api/style', async (request, response) => {
+  try {
+    const { niche, creators, transcriptText } = request.body || {};
+    if (!niche || !niche.label) {
+      response.status(400).json({ error: 'niche is required.' });
+      return;
+    }
+    if (!Array.isArray(creators) || creators.length === 0) {
+      response.status(400).json({ error: 'creators are required (run creators first).' });
+      return;
+    }
+
+    const posts = await runApifyStage('scrape', creators, { timeoutMs: 900000 });
+    if (!Array.isArray(posts) || posts.length === 0) {
+      response.json({ ok: true, recipe: null, perCreator: [], posts: [] });
+      return;
+    }
+
+    const features = await runApifyStage('quantify', posts, { timeoutMs: 900000 });
+    const perCreator = await runApifyStage(
+      'aggregate',
+      { creators, posts, per_video_features: features },
+      { timeoutMs: 120000 }
+    );
+
+    const analyzable = Array.isArray(perCreator) && perCreator.some((p) => p.videos_analyzed > 0);
+    if (!analyzable) {
+      response.json({ ok: true, recipe: null, perCreator, posts });
+      return;
+    }
+
+    const report = {
+      generated_at: new Date().toISOString(),
+      source: { script_text: transcriptText || '', transcript_source: 'box-stored' },
+      niche,
+      creators,
+      posts,
+      per_video_features: features,
+      per_creator: perCreator,
+    };
+    const recipe = await runApifyStage('synthesize', report, { timeoutMs: 120000 });
+    response.json({ ok: true, recipe, perCreator, posts });
+  } catch (error) {
+    console.error(error);
+    response.status(500).json({ error: getPublicErrorMessage(error) });
+  }
+});
+
+// --- Desktop stage 6: resolve a plan asset reference to a Box file id ---
+app.post('/api/box/resolve', async (request, response) => {
+  try {
+    const uri = request.body && (request.body.uri || request.body.boxFileId || request.body.source);
+    if (!uri) {
+      response.status(400).json({ error: 'uri is required.' });
+      return;
+    }
+    const fileId = await resolveBoxFileId(String(uri));
+    if (!fileId) {
+      response.status(404).json({ error: `Could not resolve "${uri}" to a Box file.` });
+      return;
+    }
+    response.json({ ok: true, fileId });
+  } catch (error) {
+    console.error(error);
+    response.status(500).json({ error: getPublicErrorMessage(error) });
+  }
+});
+
+// --- Desktop stage 6: stream a Box file (range-enabled, for <video> playback) ---
+app.get('/api/box/file/:fileId', async (request, response) => {
+  try {
+    const { fileId } = request.params;
+    if (!/^\d+$/.test(fileId)) {
+      response.status(400).end('invalid file id');
+      return;
+    }
+    const token = await getBoxAccessToken();
+    const headers = { Authorization: `Bearer ${token}` };
+    if (request.headers.range) headers.Range = request.headers.range;
+
+    const boxResp = await fetch(`${BOX_API_BASE}/files/${fileId}/content`, { headers });
+    if (boxResp.status !== 200 && boxResp.status !== 206) {
+      response.status(boxResp.status === 404 ? 404 : 502).end(`Box file fetch failed (${boxResp.status}).`);
+      return;
+    }
+
+    response.status(boxResp.status);
+    for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+      const value = boxResp.headers.get(header);
+      if (value) response.setHeader(header, value);
+    }
+    if (!boxResp.headers.get('accept-ranges')) response.setHeader('Accept-Ranges', 'bytes');
+    if (!boxResp.headers.get('content-type')) response.setHeader('Content-Type', 'video/mp4');
+
+    if (boxResp.body) {
+      Readable.fromWeb(boxResp.body).pipe(response);
+    } else {
+      response.end();
+    }
+  } catch (error) {
+    console.error(error);
+    if (!response.headersSent) response.status(500).end(getPublicErrorMessage(error));
+    else response.end();
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Reelify upload server listening on http://localhost:${PORT}`);
 });
+
+// Read a reel's stored facecam transcript (text + segments) from Box.
+async function readFacecamTranscript(box, reelFolder) {
+  const reelItems = await box.listFolderItems(reelFolder.id);
+  const facecamFolder = reelItems.find((item) => item.type === 'folder' && item.name === 'facecam');
+  if (!facecamFolder) {
+    throw new Error(`Missing facecam folder for ${reelFolder.name}.`);
+  }
+
+  const facecamItems = await box.listFolderItems(facecamFolder.id);
+  const jsonFile = facecamItems.find((item) => item.type === 'file' && item.name === 'transcript.json');
+  const txtFile = facecamItems.find((item) => item.type === 'file' && item.name === 'transcript.txt');
+
+  let text = '';
+  let segments = [];
+
+  if (jsonFile) {
+    const json = await box.downloadJsonFile(jsonFile.id).catch(() => null);
+    if (json) {
+      if (typeof json.text === 'string') text = json.text.trim();
+      if (Array.isArray(json.segments)) {
+        segments = json.segments.map((s) => ({
+          start: s.start,
+          end: s.end,
+          text: String(s.text || '').trim(),
+        }));
+      }
+    }
+  }
+
+  if (!isUsableTranscript(text) && txtFile) {
+    const raw = await box.downloadTextFile(txtFile.id).catch(() => '');
+    if (isUsableTranscript(raw)) text = raw.trim();
+  }
+
+  return { text, segments };
+}
+
+const NICHE_SYSTEM = `You categorize short-form personal-brand creator content (Instagram Reels / TikTok).
+Given a transcript of a creator talking to camera, return:
+- the niche they're operating in: a tight label, search keywords a discovery API could use to
+  find similar HUMAN creators, the audience, and a one-sentence rationale.
+  CRITICAL: describe the TYPE OF PERSON / CREATOR, never a product, app, tool, or software
+  category. The goal is to find real human creators to learn editing style from, so the label
+  and keywords must point at people, not products.
+  Examples: prefer "solo founder build-in-public" over "entrepreneurship"; prefer
+  "indie hacker building AI tools" over "AI video editing software"; prefer
+  "gym creator for skinny beginners" over "fitness app". Keywords should be the kind of
+  phrases you'd use to search for CREATORS in that space (e.g. "indie hacker creator",
+  "build in public founder"), not tool/brand names.
+- the video FORMAT/TYPE: how the video is structured as a piece of content, not its topic.
+  video_type.label MUST be one of:
+  "talking head", "vlog", "informative", "tutorial", "story time", "review",
+  "product demo", "reaction", "listicle", "interview", "behind the scenes", "promo".
+  Pick the single best fit. Include a short video_type.rationale (one phrase) and
+  video_type.confidence (0-1).
+Return JSON only.`;
+
+async function inferNicheNative(transcript) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is missing.');
+  }
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: NICHE_SYSTEM },
+        {
+          role: 'user',
+          content:
+            `Transcript:\n"""\n${transcript}\n"""\n\n` +
+            `Return JSON with keys: label, keywords (3-12 strings), audience, rationale, ` +
+            `video_type { label, rationale, confidence }.`,
+        },
+      ],
+    }),
+  });
+  const payload = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    throw new Error(`Niche inference failed: ${payload?.error?.message || resp.status}`);
+  }
+  const raw = payload.choices?.[0]?.message?.content || '{}';
+  let niche;
+  try {
+    niche = JSON.parse(raw);
+  } catch {
+    niche = {};
+  }
+  const keywords =
+    Array.isArray(niche.keywords) && niche.keywords.length
+      ? niche.keywords.slice(0, 12).map(String)
+      : ['short form', 'creator'];
+  const vt = niche.video_type && typeof niche.video_type === 'object' ? niche.video_type : {};
+  const videoType = {
+    label: typeof vt.label === 'string' && vt.label.trim() ? vt.label.trim().toLowerCase() : 'talking head',
+    rationale: typeof vt.rationale === 'string' ? vt.rationale : '',
+    confidence: typeof vt.confidence === 'number' ? Math.max(0, Math.min(1, vt.confidence)) : null,
+  };
+  return {
+    label: niche.label || 'general creator',
+    keywords,
+    audience: niche.audience || 'general audience',
+    rationale: niche.rationale || '',
+    video_type: videoType,
+  };
+}
+
+// Run one stage of the apify-integration CLI as a child process, passing input
+// as JSON on stdin and parsing JSON from stdout. Stages log to stderr only.
+// The apify stages stream actor progress logs (e.g. "instagram-scraper runId:..
+// ACTOR: Pulling container image...") to stdout BEFORE printing the final JSON
+// result. So stdout is NOT pure JSON — we have to dig the result back out.
+function parseApifyStdout(stdout) {
+  // Fast path: stdout was pure JSON (no logs leaked).
+  try {
+    return JSON.parse(stdout);
+  } catch (_) {}
+
+  // The CLI prints its result via JSON.stringify(...) — a single line. Walk the
+  // lines from the end and return the last one that parses as JSON.
+  const lines = stdout.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line || (line[0] !== '{' && line[0] !== '[')) continue;
+    try {
+      return JSON.parse(line);
+    } catch (_) {}
+  }
+
+  // Pretty-printed (multi-line) result: the apify CLI prints
+  // JSON.stringify(report, null, 2), so the value opens with a bare "{" or "["
+  // at column 0 and runs to the end. Actor progress logs are line-prefixed
+  // (timestamps, "instagram-scraper runId:..."), so they never start at col 0
+  // with a lone bracket. Find the last such line and parse from there.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i] === '{' || lines[i] === '[') {
+      try {
+        return JSON.parse(lines.slice(i).join('\n'));
+      } catch (_) {}
+    }
+  }
+
+  // Last resort: scan forward tracking brace/bracket depth (string-aware) and
+  // keep the last complete top-level value.
+  const block = extractLastJsonBlock(stdout);
+  if (block) {
+    return JSON.parse(block); // let a parse failure here surface to the caller
+  }
+  throw new Error('no JSON value found in stdout');
+}
+
+function extractLastJsonBlock(text) {
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  let last = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+    if (ch === '{' || ch === '[') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}' || ch === ']') {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start !== -1) last = text.slice(start, i + 1);
+      }
+    }
+  }
+  return last;
+}
+
+function runApifyStage(stage, stdinObj, { timeoutMs = 900000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const bin = fsSync.existsSync(APIFY_TSX) ? APIFY_TSX : 'tsx';
+    const child = spawn(bin, ['src/cli.ts', stage], { cwd: APIFY_INTEGRATION_DIR, env: process.env });
+
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`apify ${stage} timed out after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(new Error(`apify ${stage} failed to start: ${error.message}`));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(`apify ${stage} exited ${code}: ${stderr.slice(-600).trim()}`));
+        return;
+      }
+      try {
+        resolve(parseApifyStdout(stdout));
+      } catch {
+        // Show the TAIL — the JSON result (if any) sits at the END of stdout,
+        // after the streamed actor progress logs.
+        reject(new Error(`apify ${stage} returned non-JSON output: ...${stdout.slice(-300)}`));
+      }
+    });
+
+    if (stdinObj !== undefined) {
+      child.stdin.write(typeof stdinObj === 'string' ? stdinObj : JSON.stringify(stdinObj));
+    }
+    child.stdin.end();
+  });
+}
+
+// Resolve a plan asset reference (box://files/<id>, numeric id, or a Box path
+// like "raw/clip.mp4" / "reel_001/facecam/facecam.mp4") to a Box file id.
+async function resolveBoxFileId(uri) {
+  const direct = uri.match(/^box:\/\/files\/(\d+)/);
+  if (direct) return direct[1];
+  if (/^\d+$/.test(uri.trim())) return uri.trim();
+
+  const box = await createBoxClient();
+  const reelsFolder = await box.getReelsFolder().catch(() => null);
+  const roots = [
+    process.env.BOX_RAW_FOLDER_ID,
+    process.env.BOX_OUTPUT_FOLDER_ID,
+    reelsFolder && reelsFolder.id,
+    process.env.BOX_REELS_FOLDER_ID,
+    process.env.BOX_REELS_ROOT_FOLDER_ID,
+  ].filter(Boolean);
+
+  const clean = uri.replace(/^box:\/\//, '').replace(/^\.?\//, '');
+  const segs = clean.split('/').filter(Boolean);
+  if (segs.length === 0) return null;
+
+  // Try the full path, and the path with its first segment dropped (handles
+  // plans that prefix a root folder name, e.g. "raw/clip.mp4").
+  const candidates = segs.length > 1 ? [segs, segs.slice(1)] : [segs];
+
+  for (const root of roots) {
+    for (const candidate of candidates) {
+      const fileId = await walkBoxToFile(box, root, candidate).catch(() => null);
+      if (fileId) return fileId;
+    }
+  }
+  return null;
+}
+
+async function walkBoxToFile(box, rootId, segs) {
+  let parentId = rootId;
+  for (let i = 0; i < segs.length - 1; i++) {
+    const folder = await box.findChild(parentId, segs[i], 'folder');
+    if (!folder) return null;
+    parentId = folder.id;
+  }
+  const file = await box.findChild(parentId, segs[segs.length - 1], 'file');
+  return file ? file.id : null;
+}
 
 async function saveFacecamClip({ file, durationSeconds, createdAt, reelName, transcriptText, transcriptJson }) {
   const box = await createBoxClient();

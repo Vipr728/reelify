@@ -1,5 +1,6 @@
 import React from "react";
 import { Icon, RadarChart } from "../ui.jsx";
+import StagedLoader from "./StagedLoader.jsx";
 
 export default function StyleScreen({ style, axes, loading, error, demo, onRetry, onNext, onBack }) {
   // Show the processing state while loading OR before the loader has kicked in
@@ -7,18 +8,15 @@ export default function StyleScreen({ style, axes, loading, error, demo, onRetry
   if (loading || (!style && !error)) {
     return (
       <div className="screen style-screen">
-        <div className="state-wrap">
-          <div className="proc-orbit fadeIn">
-            <div className="ring"></div>
-            <div className="ring r2"></div>
-            <div className="core"></div>
-          </div>
-          <h1 className="h1 fadeIn" style={{ fontSize: 26 }}>Synthesizing the master style</h1>
-          <div className="proc-line fadeIn">
-            Scraping creator reels, quantifying pacing &amp; captions, fusing into one recipe… this can take a few minutes.
-          </div>
-          <div className="proc-bar"><div className="proc-fill" style={{ width: "60%" }}></div></div>
-        </div>
+        <StagedLoader
+          title="Synthesizing your master style"
+          steps={[
+            { label: "Scraping creator reels", est: 120 },
+            { label: "Quantifying pacing & captions", est: 90 },
+            { label: "Aggregating creator styles", est: 20 },
+            { label: "Synthesizing your recipe", est: 25 },
+          ]}
+        />
       </div>
     );
   }
