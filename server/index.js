@@ -21,6 +21,8 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const BOX_API_BASE = 'https://api.box.com/2.0';
 const BOX_UPLOAD_BASE = 'https://upload.box.com/api/2.0';
 const OPENAI_MODEL = process.env.OPENAI_BROLL_MODEL || 'gpt-4.1-mini';
+const OPENAI_TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-transcribe';
+const OPENAI_AUDIO_LIMIT_BYTES = 24 * 1024 * 1024;
 
 fsSync.mkdirSync(UPLOAD_DIR, { recursive: true });
 fsSync.mkdirSync(WORK_DIR, { recursive: true });
@@ -103,7 +105,7 @@ app.post('/api/clips', upload.single('clip'), async (request, response) => {
 
     const result =
       clipType === 'talking'
-        ? await saveFacecamClip({ file: request.file, durationSeconds, createdAt, reelName })
+        ? await saveFacecamClip({ file: request.file, durationSeconds, createdAt, cleanupPaths, reelName })
         : await saveBrollClip({ file: request.file, durationSeconds, createdAt, cleanupPaths, reelName });
 
     response.json(result);
@@ -119,7 +121,7 @@ app.listen(PORT, () => {
   console.log(`Reelify upload server listening on http://localhost:${PORT}`);
 });
 
-async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
+async function saveFacecamClip({ file, durationSeconds, createdAt, cleanupPaths, reelName }) {
   const box = await createBoxClient();
   const reelsFolder = await box.getReelsFolder();
   const reelFolder = reelName
@@ -129,18 +131,25 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
   await box.ensureFolder(reelFolder.id, 'broll');
 
   const uploadedVideo = await box.uploadFileOrVersion(facecamFolder.id, 'facecam.mp4', file.path, file.mimetype);
-  const transcriptTextFile = await box.uploadTextIfMissing(
+  const workDir = path.join(WORK_DIR, `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  cleanupPaths.push(workDir);
+  await fs.mkdir(workDir, { recursive: true });
+
+  const transcript = await transcribeTalkingClip({
+    videoPath: file.path,
+    workDir,
+    durationSeconds,
+    createdAt,
+    boxFileId: uploadedVideo.id,
+    boxPath: `/reels/${reelFolder.name}/facecam/facecam.mp4`,
+  });
+  const transcriptTextFile = await box.uploadTextOrVersion(
     facecamFolder.id,
     'transcript.txt',
-    'Transcript pending.\n',
+    `${transcript.text || ''}\n`,
     'text/plain'
   );
-  const transcriptJsonFile = await box.uploadJsonIfMissing(facecamFolder.id, 'transcript.json', {
-    status: 'pending',
-    text: '',
-    segments: [],
-    created_at: createdAt,
-  });
+  const transcriptJsonFile = await box.uploadJsonOrVersion(facecamFolder.id, 'transcript.json', transcript);
 
   const manifest = await box.upsertManifest(reelFolder.id, (currentManifest) => ({
     ...baseManifest(currentManifest, reelFolder.name),
@@ -151,6 +160,7 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
       duration_seconds: durationSeconds,
       transcript_text_file_id: transcriptTextFile.id,
       transcript_json_file_id: transcriptJsonFile.id,
+      transcript_status: transcript.status,
       uploaded_at: new Date().toISOString(),
     },
   }));
@@ -162,6 +172,10 @@ async function saveFacecamClip({ file, durationSeconds, createdAt, reelName }) {
     reelName: reelFolder.name,
     reel,
     boxPath: `/reels/${reelFolder.name}/facecam/facecam.mp4`,
+    transcript: {
+      status: transcript.status,
+      text: transcript.text,
+    },
     uploadedFile: miniItem(uploadedVideo),
     manifestFile: miniItem(manifest),
   };
@@ -420,6 +434,17 @@ async function createBoxClient() {
     return uploadBuffer(folderId, name, Buffer.from(text), mimeType);
   }
 
+  async function uploadTextOrVersion(folderId, name, text, mimeType) {
+    const existingFile = await findChild(folderId, name, 'file');
+    const bytes = Buffer.from(text);
+
+    if (existingFile) {
+      return uploadBufferVersion(existingFile.id, name, bytes, mimeType);
+    }
+
+    return uploadBuffer(folderId, name, bytes, mimeType);
+  }
+
   async function uploadJsonIfMissing(folderId, name, data) {
     const existingFile = await findChild(folderId, name, 'file');
     if (existingFile) {
@@ -502,6 +527,7 @@ async function createBoxClient() {
     uploadJsonIfMissing,
     uploadJsonOrVersion,
     uploadTextIfMissing,
+    uploadTextOrVersion,
     upsertManifest,
   };
 }
@@ -583,6 +609,103 @@ async function createTinyStoryboard(videoPath, workDir) {
     path: storyboardPath,
     bytes: stats.size,
   };
+}
+
+async function transcribeTalkingClip({ videoPath, workDir, durationSeconds, createdAt, boxFileId, boxPath }) {
+  const audioPath = path.join(workDir, 'facecam-audio.m4a');
+
+  try {
+    await createSmallAudioForTranscription(videoPath, audioPath);
+    const audioBytes = await fs.readFile(audioPath);
+
+    if (audioBytes.byteLength > OPENAI_AUDIO_LIMIT_BYTES) {
+      throw new Error('Compressed audio is still too large for transcription.');
+    }
+
+    const formData = new FormData();
+    formData.append('model', OPENAI_TRANSCRIBE_MODEL);
+    formData.append('response_format', 'json');
+    formData.append('language', 'en');
+    formData.append(
+      'prompt',
+      'Short creator talking-head recording for a social reel. Preserve wording, creator phrasing, brand names, and filler words when clear.'
+    );
+    formData.append('file', new Blob([audioBytes], { type: 'audio/mp4' }), 'facecam.m4a');
+
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: formData,
+    });
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(`OpenAI transcription failed: ${payload?.error?.message || response.status}`);
+    }
+
+    return {
+      schema_version: 1,
+      status: 'complete',
+      clip_type: 'talking',
+      text: payload?.text || '',
+      segments: [],
+      language: 'en',
+      generated_at: new Date().toISOString(),
+      openai_model: OPENAI_TRANSCRIBE_MODEL,
+      usage: payload?.usage || null,
+      source: {
+        original_box_file_id: boxFileId,
+        original_box_path: boxPath,
+        original_uploaded_to_box: true,
+        compressed_audio_sent_to_openai: true,
+        compressed_audio_uploaded_to_box: false,
+        compressed_audio_bytes: audioBytes.byteLength,
+        duration_seconds: durationSeconds,
+        recorded_at: createdAt,
+      },
+    };
+  } catch (error) {
+    return {
+      schema_version: 1,
+      status: 'error',
+      clip_type: 'talking',
+      text: `Transcript failed: ${getPublicErrorMessage(error)}`,
+      segments: [],
+      language: 'en',
+      generated_at: new Date().toISOString(),
+      openai_model: OPENAI_TRANSCRIBE_MODEL,
+      usage: null,
+      source: {
+        original_box_file_id: boxFileId,
+        original_box_path: boxPath,
+        original_uploaded_to_box: true,
+        compressed_audio_sent_to_openai: false,
+        compressed_audio_uploaded_to_box: false,
+        compressed_audio_bytes: 0,
+        duration_seconds: durationSeconds,
+        recorded_at: createdAt,
+      },
+      error: getPublicErrorMessage(error),
+    };
+  }
+}
+
+async function createSmallAudioForTranscription(videoPath, audioPath) {
+  await execFileAsync('ffmpeg', [
+    '-y',
+    '-i',
+    videoPath,
+    '-vn',
+    '-ac',
+    '1',
+    '-ar',
+    '16000',
+    '-b:a',
+    '32k',
+    audioPath,
+  ]);
 }
 
 async function tagBrollWithOpenAI({

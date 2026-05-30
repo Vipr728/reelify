@@ -593,6 +593,7 @@ async function uploadClip(clip: CapturedClip, reelName: string) {
     boxPath?: string;
     clipType?: ClipType;
     reel?: ReelSummary;
+    transcript?: { status?: string; text?: string };
     metadata?: { summary?: string; tagging_status?: string };
   };
 
@@ -600,6 +601,16 @@ async function uploadClip(clip: CapturedClip, reelName: string) {
     const tagStatus = payload.metadata.tagging_status === 'complete' ? 'Tagged' : 'Uploaded';
     return {
       message: `${tagStatus}: ${payload.metadata.summary}`,
+      reel: payload.reel,
+    };
+  }
+
+  if (payload.clipType === 'talking' && payload.transcript) {
+    return {
+      message:
+        payload.transcript.status === 'complete'
+          ? 'Uploaded and transcribed'
+          : payload.transcript.text || 'Uploaded, transcript failed',
       reel: payload.reel,
     };
   }

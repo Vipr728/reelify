@@ -13,6 +13,8 @@ npx expo start
 The Expo app uploads clips to the local server at `EXPO_PUBLIC_REELIFY_API_URL`.
 The server uses private `.env` values to upload originals to Box and only sends a
 tiny FFmpeg-generated storyboard image to OpenAI for b-roll metadata.
+For talking clips, the server extracts a small `.m4a` audio file for OpenAI
+transcription, then writes real `transcript.txt` and `transcript.json` files.
 Use the app's reel strip to create/select the active reel before recording. Each
 reel can have one `facecam.mp4` and many b-roll `clip_###` folders.
 
