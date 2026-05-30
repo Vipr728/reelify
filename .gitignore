@@ -1,0 +1,26 @@
+# secrets
+.env
+.env.local
+*.env
+
+# node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# expo / rn
+app/.expo/
+app/dist/
+app/web-build/
+app/ios/Pods/
+app/ios/build/
+app/android/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.orig.*
+
+# misc
+.DS_Store
+*.log
