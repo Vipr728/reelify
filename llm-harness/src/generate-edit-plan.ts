@@ -10,7 +10,102 @@ import { z } from "zod";
 
 import { createBoxClientFromEnv } from "./box-client";
 import { buildUserPrompt, SYSTEM_PROMPT } from "./prompts";
-import { assertPlanCompatibleWithContext, EditContextSchema, EditPlanSchema, summarizeEditPlan } from "./schema";
+import {
+  assertPlanCompatibleWithContext,
+  EditContextSchema,
+  EditPlan,
+  EditPlanObjectSchema,
+  EditPlanSchema,
+  summarizeEditPlan,
+} from "./schema";
+
+// Must match EPSILON in schema.ts.
+const TRIM_EPSILON = 0.001; // Must match EPSILON in schema.ts.
+const MIN_TOKEN_DURATION = 0.02; // Minimum slice for a salvaged degenerate token (> TRIM_EPSILON).
+
+// The model's caption timings are imperfect: cues derived from the full
+// transcript can run past output.durationSec (the cut), and individual tokens
+// can be zero-duration, out of order, or out of the caption window. The retry
+// loop does not reliably correct these, so deterministically sanitize captions
+// to satisfy the schema's caption rules:
+//   - drop cues that start at/after the cut; clamp cue ends to the cut
+//   - keep tokens ordered, non-overlapping, within the cue, and positive-length
+//   - drop tokens that genuinely cannot fit before the cue ends
+function sanitizeCaptions(plan: EditPlan): EditPlan {
+  const duration = plan.output.durationSec;
+  for (const track of plan.tracks.captions) {
+    track.items = track.items
+      .filter((item) => item.timelineInSec < duration - TRIM_EPSILON)
+      .map((item) => {
+        const captionIn = Math.max(0, item.timelineInSec);
+        const captionOut = Math.min(item.timelineOutSec, duration);
+        return { ...item, timelineInSec: captionIn, timelineOutSec: captionOut, tokens: item.tokens };
+      })
+      .filter((item) => item.timelineOutSec > item.timelineInSec + TRIM_EPSILON)
+      .map((item) => ({ ...item, tokens: sanitizeTokens(item) }));
+  }
+  return plan;
+}
+
+// The model often emits video/audio items whose timeline length does not match
+// their source window (and playbackRate, for video). The timeline windows drive
+// video coverage, so they must be preserved: instead reconcile the SOURCE window
+// (and video playbackRate) to the timeline, clamped to the asset's real duration.
+function reconcileTrackDurations(plan: EditPlan): EditPlan {
+  const assetDuration = new Map(plan.assets.map((asset) => [asset.id, asset.durationSec]));
+
+  for (const track of plan.tracks.video) {
+    for (const item of track.items) {
+      const timelineDuration = item.timelineOutSec - item.timelineInSec;
+      if (timelineDuration <= 0) continue;
+      const rate = item.playbackRate > 0 ? item.playbackRate : 1;
+      const maxSource = assetDuration.get(item.assetId) ?? Infinity;
+      const sourceOut = Math.min(item.sourceInSec + timelineDuration * rate, maxSource);
+      const sourceDuration = sourceOut - item.sourceInSec;
+      if (sourceDuration <= 0) continue;
+      item.sourceOutSec = sourceOut;
+      // Keep timelineDuration === sourceDuration / playbackRate exact after any clamp.
+      item.playbackRate = sourceDuration / timelineDuration;
+    }
+  }
+
+  for (const track of plan.tracks.audio) {
+    for (const item of track.items) {
+      const timelineDuration = item.timelineOutSec - item.timelineInSec;
+      if (timelineDuration <= 0) continue;
+      const maxSource = assetDuration.get(item.assetId) ?? Infinity;
+      const sourceOut = Math.min(item.sourceInSec + timelineDuration, maxSource);
+      const sourceDuration = sourceOut - item.sourceInSec;
+      if (sourceDuration <= 0) continue;
+      item.sourceOutSec = sourceOut;
+      // Audio has no playbackRate: match the timeline to the (possibly clamped)
+      // source. This only ever shortens the item, so it cannot create overlaps.
+      item.timelineOutSec = item.timelineInSec + sourceDuration;
+    }
+  }
+
+  return plan;
+}
+
+function sanitizeTokens(caption: EditPlan["tracks"]["captions"][number]["items"][number]) {
+  const captionIn = caption.timelineInSec;
+  const captionOut = caption.timelineOutSec;
+  const tokens: typeof caption.tokens = [];
+  let previousOut = captionIn;
+  for (const token of caption.tokens) {
+    const timelineInSec = Math.min(Math.max(token.timelineInSec, previousOut), captionOut);
+    let timelineOutSec = Math.min(token.timelineOutSec, captionOut);
+    if (timelineOutSec < timelineInSec + MIN_TOKEN_DURATION) {
+      timelineOutSec = Math.min(timelineInSec + MIN_TOKEN_DURATION, captionOut);
+    }
+    if (timelineOutSec <= timelineInSec + TRIM_EPSILON) {
+      continue; // no room left before the cue ends; drop this token
+    }
+    tokens.push({ ...token, timelineInSec, timelineOutSec });
+    previousOut = timelineOutSec;
+  }
+  return tokens;
+}
 
 type CliOptions = {
   inputPath: string;
@@ -51,7 +146,7 @@ async function main(): Promise<void> {
         },
       ],
       text: {
-        format: zodTextFormat(EditPlanSchema, "edit_plan"),
+        format: zodTextFormat(EditPlanObjectSchema, "edit_plan"),
       },
     });
 
@@ -61,7 +156,8 @@ async function main(): Promise<void> {
     }
 
     try {
-      const parsedPlan = EditPlanSchema.parse(response.output_parsed);
+      const repaired = reconcileTrackDurations(sanitizeCaptions(response.output_parsed as EditPlan));
+      const parsedPlan = EditPlanSchema.parse(repaired);
       assertPlanCompatibleWithContext(parsedPlan, context);
       plan = parsedPlan;
       break;

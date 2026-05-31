@@ -228,7 +228,11 @@ export const CaptionStyleSchema = z
   })
   .strict();
 
-export const EditPlanSchema = z
+// Shape-only schema (no cross-field refinements). Used as the OpenAI structured
+// output format: the SDK parses model output against this, so output_parsed is
+// always populated when the shape is valid, letting the caller deterministically
+// repair the plan before running the full semantic validation below.
+export const EditPlanObjectSchema = z
   .object({
     schemaVersion: z.literal("1.0"),
     output: z
@@ -254,13 +258,14 @@ export const EditPlanSchema = z
       })
       .strict(),
   })
-  .strict()
-  .superRefine((plan, ctx) => {
-    validateOutput(ctx, plan.output);
-    validateAssets(ctx, plan.assets);
-    validateStyles(ctx, plan);
-    validateTracks(ctx, plan);
-  });
+  .strict();
+
+export const EditPlanSchema = EditPlanObjectSchema.superRefine((plan, ctx) => {
+  validateOutput(ctx, plan.output);
+  validateAssets(ctx, plan.assets);
+  validateStyles(ctx, plan);
+  validateTracks(ctx, plan);
+});
 
 export type EditContext = z.infer<typeof EditContextSchema>;
 export type EditPlan = z.infer<typeof EditPlanSchema>;
@@ -374,10 +379,8 @@ function validateAssets(ctx: z.RefinementCtx, assets: EditPlan["assets"]): void 
 }
 
 function validateStyles(ctx: z.RefinementCtx, plan: EditPlan): void {
-  if (plan.styles.captions.length === 0) {
-    addIssue(ctx, ["styles", "captions"], "at least one caption style is required");
-  }
-
+  // Captions are optional: a recipe may disable them, in which case the plan
+  // carries no caption styles. Any styles that are present are still validated.
   const styleIds = new Set<string>();
   plan.styles.captions.forEach((style, index) => {
     requireNonEmpty(ctx, ["styles", "captions", index, "id"], style.id, "caption style id is required");
@@ -416,9 +419,8 @@ function validateTracks(ctx: z.RefinementCtx, plan: EditPlan): void {
   if (plan.tracks.video.length === 0) {
     addIssue(ctx, ["tracks", "video"], "at least one video track is required");
   }
-  if (plan.tracks.captions.length === 0) {
-    addIssue(ctx, ["tracks", "captions"], "at least one captions track is required");
-  }
+  // No captions track is required: recipes can disable captions. Caption items
+  // that are present are still fully validated below.
 
   const assetById = new Map(plan.assets.map((asset) => [asset.id, asset]));
   const captionStyleIds = new Set(plan.styles.captions.map((style) => style.id));

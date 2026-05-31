@@ -19,6 +19,7 @@ const TMP_ROOT = path.join(__dirname, '.tmp');
 const UPLOAD_DIR = path.join(TMP_ROOT, 'uploads');
 const WORK_DIR = path.join(TMP_ROOT, 'work');
 const PLAN_WORK_DIR = path.join(WORK_DIR, 'plans');
+const PLAN_CACHE_DIR = path.join(PLAN_WORK_DIR, 'cache');
 const APIFY_INTEGRATION_DIR = path.join(PROJECT_ROOT, 'apify-integration');
 const APIFY_TSX = path.join(APIFY_INTEGRATION_DIR, 'node_modules', '.bin', 'tsx');
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -30,6 +31,7 @@ const APIFY_QUANTIFY_CONCURRENCY = Number(process.env.APIFY_QUANTIFY_CONCURRENCY
 fsSync.mkdirSync(UPLOAD_DIR, { recursive: true });
 fsSync.mkdirSync(WORK_DIR, { recursive: true });
 fsSync.mkdirSync(PLAN_WORK_DIR, { recursive: true });
+fsSync.mkdirSync(PLAN_CACHE_DIR, { recursive: true });
 
 const upload = multer({
   dest: UPLOAD_DIR,
@@ -126,7 +128,10 @@ app.post('/api/clips', upload.single('clip'), async (request, response) => {
 app.post('/api/reels/:reelName/edit-plan', async (request, response) => {
   try {
     const reelName = normalizeRequiredReelName(request.params.reelName);
-    const result = await generateReelEditPlan({ reelName });
+    const force = request.body?.force === true
+      || request.query?.force === 'true'
+      || request.query?.regenerate === 'true';
+    const result = await generateReelEditPlan({ reelName, force });
 
     response.json({
       ok: true,
@@ -813,9 +818,19 @@ async function saveBrollClip({ file, durationSeconds, createdAt, cleanupPaths, r
   };
 }
 
-async function generateReelEditPlan({ reelName }) {
+async function generateReelEditPlan({ reelName, force = false }) {
   const planStartedAt = Date.now();
   logPlan(reelName, 'start', 'received edit-plan request');
+
+  const cachePath = editPlanCachePath(reelName);
+  if (!force) {
+    const cached = await readJsonFileIfExists(cachePath);
+    if (cached) {
+      logPlan(reelName, 'cache', `serving saved edit plan from ${cachePath} (pass force to regenerate)`);
+      return { ...cached, cached: true };
+    }
+  }
+
   assertPipelineConfig();
 
   logPlan(reelName, 'box', 'creating Box client and resolving reel folder');
@@ -975,7 +990,7 @@ async function generateReelEditPlan({ reelName }) {
   const reel = await box.getReelSummary(reelFolder);
   logPlan(reelName, 'done', `completed in ${formatDurationMs(Date.now() - planStartedAt)}`);
 
-  return {
+  const result = {
     reelName,
     reel,
     transcriptChars: transcriptText.length,
@@ -994,7 +1009,17 @@ async function generateReelEditPlan({ reelName }) {
     },
     debugDir: runDir,
     editPlan: editPlanSummary,
+    generatedAt: new Date().toISOString(),
+    cached: false,
   };
+
+  // Save the result and a stable copy of the full edit plan so repeat requests
+  // skip the pipeline (use force to regenerate).
+  await writeJsonFile(cachePath, result);
+  await fs.copyFile(editPlanPath, path.join(PLAN_CACHE_DIR, `edit-plan.${reelName}.json`));
+  logPlan(reelName, 'cache', `saved edit plan result to ${cachePath}`);
+
+  return result;
 }
 
 async function readFacecamTranscriptText(box, reelFolder) {
@@ -1108,6 +1133,22 @@ async function runLocalCommand(command, args, { cwd, label = command, streamStdo
 
 async function writeJsonFile(filePath, data) {
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
+
+async function readJsonFileIfExists(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+// Stable per-reel location for the saved edit-plan result, so repeat requests
+// can return the previously generated plan instead of re-running the (slow,
+// paid) Apify + LLM pipeline. Pass force to regenerate and overwrite.
+function editPlanCachePath(reelName) {
+  return path.join(PLAN_CACHE_DIR, `result.${reelName}.json`);
 }
 
 function parseJsonFromCommandStdout(stdout) {

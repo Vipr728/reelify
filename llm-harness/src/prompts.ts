@@ -23,6 +23,8 @@ export const SYSTEM_PROMPT = [
   "Use talking_head assets for the main video track and broll assets on overlay tracks when useful.",
   "B-roll may be an overlay above facecam, a background behind facecam, or full-screen cutaway; encode the exact result with track zIndex and layout fields.",
   "Generate captions as caption cues with absolute timeline seconds and token-level highlight booleans.",
+  "Every caption cue and every caption token must end at or before output.durationSec. Drop or trim any caption derived from transcript past the cut.",
+  "If the recipe disables captions, output an empty captions track list and empty caption styles. Otherwise include at least one caption style and caption track.",
 ].join("\n");
 
 export function buildUserPrompt(context: EditContext): string {
